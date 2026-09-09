@@ -33,8 +33,8 @@ services:
       - MODELS_DIR=/app/models
       
     volumes:
-      # Read-only mounts for certified model weights, adapters, and RAG index
-      - ../../ml/models:/app/models:ro
+      # Read-write mount for models so ensure_models_exist() can auto-download and persist
+      - ../../ml/models:/app/models:rw
       - ../../libs/contracts/schemas:/app/schemas:ro
       # HuggingFace cache mount prevents redownloading base weights across container restarts
       - ~/.cache/huggingface:/root/.cache/huggingface

@@ -30,7 +30,7 @@ except ImportError:
     HAS_ML = False
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
-MODELS_DIR = ROOT_DIR / "ml" / "models"
+MODELS_DIR = Path(os.getenv("MODELS_DIR", str(ROOT_DIR / "ml" / "models")))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -68,7 +68,17 @@ class LRUEmbeddingCache:
 class AsyncHybridRAG:
     def __init__(self, use_reranker: bool = True):
         self.index_json_path = MODELS_DIR / "rag-index" / "dpdp_index.json"
+        if not self.index_json_path.exists():
+            alt_json = MODELS_DIR / "dpdp_index.json"
+            if alt_json.exists():
+                self.index_json_path = alt_json
+
         self.safetensors_path = MODELS_DIR / "rag-index" / "dpdp_embeddings.safetensors"
+        if not self.safetensors_path.exists():
+            alt_safe = MODELS_DIR / "dpdp_embeddings.safetensors"
+            if alt_safe.exists():
+                self.safetensors_path = alt_safe
+
         self.embed_model_path = MODELS_DIR / "bge-small-en-v1.5"
         self.reranker_model_path = MODELS_DIR / "bge-reranker-v2-m3"
         
@@ -98,19 +108,25 @@ class AsyncHybridRAG:
 
         print(f"[RAGEngine] Booting Zero-Hop Hybrid Search on {self.device.upper()} ({self.compute_dtype})...")
         await asyncio.to_thread(self._sync_initialize)
-        self.is_ready = True
-        print("✅ [RAGEngine] Safetensors mapped & Models loaded into Tensor Cores.")
+        if self.is_ready:
+            print("✅ [RAGEngine] Safetensors mapped & Models loaded into Tensor Cores.")
+        else:
+            print("⚠️ [RAGEngine] Initialized in fallback mode (indices/models missing).")
 
     def _sync_initialize(self):
+        if not self.index_json_path.exists() or not self.safetensors_path.exists():
+            print(f"⚠️ [RAGEngine] Index files missing at {self.index_json_path} or {self.safetensors_path}. RAG disabled until indexed.")
+            return
+
         # 1. Map JSON Index
         with open(self.index_json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        self.chunks = data["chunks"]
-        self.metadatas = data["metadatas"]
+        self.chunks = data.get("chunks", [])
+        self.metadatas = data.get("metadatas", [])
 
         # 2. Map Lexical Index
         tokenized_corpus = [self._tokenize(c) for c in self.chunks]
-        self.bm25 = BM25Okapi(tokenized_corpus)
+        self.bm25 = BM25Okapi(tokenized_corpus) if tokenized_corpus else None
 
         # 3. Map Dense Safetensors (Zero-Copy)
         tensors = load_file(str(self.safetensors_path), backend="mmap")
@@ -119,12 +135,20 @@ class AsyncHybridRAG:
 
         # 4. Mount Neural Models to GPU with BF16/FP16 Tensor Core Acceleration
         model_kwargs = {"torch_dtype": self.compute_dtype}
-        self.embed_model = SentenceTransformer(str(self.embed_model_path), device=self.device, model_kwargs=model_kwargs)
+        embed_target = str(self.embed_model_path) if self.embed_model_path.exists() else "BAAI/bge-small-en-v1.5"
+        self.embed_model = SentenceTransformer(embed_target, device=self.device, model_kwargs=model_kwargs)
         
-        if self.use_reranker and self.reranker_model_path.exists():
-            self.reranker_model = CrossEncoder(str(self.reranker_model_path), max_length=512, device=self.device, model_kwargs=model_kwargs)
+        if self.use_reranker:
+            reranker_target = str(self.reranker_model_path) if self.reranker_model_path.exists() else "BAAI/bge-reranker-v2-m3"
+            try:
+                self.reranker_model = CrossEncoder(reranker_target, max_length=512, device=self.device, model_kwargs=model_kwargs)
+            except Exception as e:
+                print(f"⚠️ [RAGEngine] Failed to load reranker {reranker_target}: {e}")
+                self.reranker_model = None
         else:
             self.reranker_model = None
+
+        self.is_ready = True
 
     def _tokenize(self, text: str) -> List[str]:
         words = re.findall(r'\w+', str(text).lower())

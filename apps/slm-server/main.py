@@ -6,9 +6,17 @@ O(1) Memory Coalescing, and FP8 VRAM Management.
 """
 
 import os
+import sys
 import time
 import json
 import uuid
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from typing import Dict, Any, Optional
 from pathlib import Path
 
