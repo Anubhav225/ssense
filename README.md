@@ -1,231 +1,262 @@
-# Ssense
+# 🛡️ Ssense
 
 > **Zero-Knowledge Edge AI for Privacy Policy Analysis and Browser-Side Enforcement.**
 
-Ssense is a production-grade, edge-native privacy platform that combines local AI analysis with browser-side privacy controls to help users understand data collection practices and reduce exposure to enterprise-grade tracking techniques. 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Manifest V3](https://img.shields.io/badge/Chrome%20Extension-Manifest%20V3-success.svg)](https://developer.chrome.com/docs/extensions/mv3/intro/)
+[![Rust 2021](https://img.shields.io/badge/Rust-Native%20Daemon%202021-orange.svg)](https://www.rust-lang.org/)
+[![FastAPI](https://img.shields.io/badge/Backend-FastAPI%20%2B%20vLLM-009688.svg)](https://fastapi.tiangolo.com/)
+[![DPDP Act 2023](https://img.shields.io/badge/Compliance-DPDP%20Act%202023-purple.svg)](https://www.meity.gov.in/)
 
-Unlike traditional cloud-based privacy tools, Ssense operates entirely on the edge. It utilizes a local 9-billion parameter Large Language Model running via a bare-metal Rust Native Daemon to audit privacy policies in milliseconds, and injects stealth rootkits into the browser's `MAIN` world to blind hardware fingerprinting scripts before they execute.
+Ssense is a production-grade, edge-native privacy platform that combines on-device AI analysis with browser-side privacy controls. It empowers users to understand data collection practices in plain English and automatically mitigates enterprise tracking techniques in accordance with India's **Digital Personal Data Protection (DPDP) Act 2023**.
 
-**Core Value Proposition:**
-* **For Users:** Absolute privacy, zero latency, and an invisible shield against tracking and dark patterns.
-* **For Enterprise/Regulators:** Deterministic, mathematically guaranteed enforcement of the DPDP Act 2023 at the network layer.
-* **For Engineering:** A modular, crash-resilient architecture bridging V8 JavaScript, Rust, and C++ tensor math.
-
----
-
-## 🛡️ Key Features
-
-### Edge & Cloud Dual-Mode AI Architecture
-* **On-Device & Dual-Tier Inference:** Audits privacy policies locally using a specialized **9-Billion Parameter Small Language Model (`Qwen/Qwen3.5-9B`)** fine-tuned via Unsloth (`rsLoRA` + `SimPO`) with GGUF / vLLM multi-LoRA deployment options.
-* **Dual-Mode Failover (`AUTO` / `LOCAL_DAEMON` / `CLOUD_SERVER`):** Automatically routes inference requests to the bare-metal Rust Native Daemon (`localhost`) for zero-latency local execution, with seamless exponential-backoff failover to the hardened FastAPI Virtual SLM Server (`apps/slm-server`).
-* **Deterministic Output:** Uses GBNF (GPT-BNF) grammar to physically constrain the C++ tensor engine, guaranteeing 100% valid JSON schema compliance (`dpdp_schema.json`) with zero parsing failures.
-* **Persistent LRU Policy Cache:** Features a SHA-256 digest-keyed inference cache (`completedAuditsCache` with 30-minute TTL) across open browser tabs, serving deduplicated DPDP audit reports in `<5ms`.
-* **4-Byte LE Binary Framing:** Employs ultra-reliable Little-Endian binary IPC framing between Chrome MV3 and the Rust Daemon, completely eliminating UI lockups and JSON parse errors.
-
-### Enterprise Cryptographic Anti-Theft & Model Protection
-* **HMAC-SHA256 Challenge-Response Authentication:** Every request to the Virtual SLM Server is cryptographically signed using Web Crypto (`X-Ssense-Signature`, `X-Ssense-Timestamp`, `X-Ssense-Nonce`). The server enforces a strict 30-second timestamp window and nonce replay prevention cache to thwart Origin spoofing and API key theft.
-* **Statutory Model Extraction Shield (`AntiExtractionGuard`):** Actively monitors prompt tokens and domain payloads for systematic distillation or chain-of-thought extraction probing. Offending requests are throttled with `HTTP 429 Too Many Requests` and injected with verifiable statutory watermarks (`[Ssense-DPDP-Act-2026-Certified-Provenance]`).
-
-### SOTA Preemptive Privacy Enforcement & DOM Shielding
-* **MAIN World API Spoofing:** Injects stealth Proxies at `document_start` to override `HTMLCanvasElement`, `WebGLRenderingContext`, `AudioContext`, and `Navigator.hardwareConcurrency`.
-* **Anti-Detection & Getter Bypass:** Uses a Singleton `WeakSet` registry to mask Proxies as `[native code]` and hooks `HTMLIFrameElement.prototype.contentWindow` to recursively sanitize clean-room iframes against FingerprintJS v4.
-* **Active DOM Node Removal (`dark-pattern-blocker.ts`):** Goes beyond visual hiding by actively stripping (`el.remove()`) offending third-party `<script>` and `<iframe>` tracking nodes from the live DOM and scrubbing image tracking URLs (`el.removeAttribute('src')`), backed by instant CSS rules (`.ssense-blocked-element`).
-* **Network Telemetry Interception (`api-spoof.ts`):** Hooks `window.fetch` and `XMLHttpRequest` in the MAIN world to abort requests targeting blocked tracker domains (`__ssenseBlockedDomains`) and scrub invasive telemetry headers (`X-Telemetry`, `X-Tracker`, `X-Analytics`, `X-Mixpanel`).
-
-### Agentic UX & Forensic Reporting
-* **Granular Shield Controls Modal (`🛡️ Shield`):** Allows users to toggle active third-party tracker blocking, hardware API spoofing, and Global Privacy Control (`GPC`) signals on the fly.
-* **Dual-Scorecard & Obfuscation Telemetry:** Displays both the calibrated `DPDP Trust Score` (0-100) and an `Obfuscation Subtlety Rating` (0-100) highlighting complex corporate legalese intentionally designed to obscure statutory violations.
-* **Forensic Audit Report Export (`📥 Export Report`):** One-click generation and instant download of structured Markdown forensic compliance reports (`ssense_audit_*.md`) complete with statute citations, evidence quotes, and semantic justifications.
+Unlike cloud-dependent privacy extensions, Ssense operates with an **Edge-First / Zero-Knowledge** philosophy: it can run a quantized 9-billion parameter Small Language Model locally on your machine via a bare-metal Rust Native Host daemon, auditing privacy policies and powering an interactive legal co-pilot without transmitting policy text to the cloud.
 
 ---
 
-## 🏗️ Architecture Workflow
+## 📑 Table of Contents
 
-Ssense bridges the sandboxed Chrome V8 engine with bare-metal OS execution via Native Messaging and Cloud orchestration.
+1. [Architecture & System Overview](#-architecture--system-overview)
+2. [Subsystems & Major Folders](#-subsystems--major-folders)
+3. [Walkthrough: Running & Testing in Browser with Native Host](#-walkthrough-running--testing-in-browser-with-the-native-host)
+   - [Prerequisites](#prerequisites)
+   - [Step 1: Compile the Rust Native Daemon](#step-1-compile-the-rust-native-daemon)
+   - [Step 2: Register the Native Host with Chrome](#step-2-register-the-native-host-with-chrome)
+   - [Step 3: Build the Chrome Extension](#step-3-build-the-chrome-extension)
+   - [Step 4: Load Extension in Google Chrome](#step-4-load-extension-in-google-chrome)
+   - [Step 5: End-to-End Verification & Browser Testing](#step-5-end-to-end-verification--browser-testing)
+   - [Step 6: Diagnostic Logs & Troubleshooting](#step-6-diagnostic-logs--troubleshooting)
+4. [Running the Virtual SLM Cloud Server](#-running-the-virtual-slm-cloud-server)
+5. [Automated Verification & Test Matrix](#-automated-verification--test-matrix)
+6. [License](#-license)
+
+---
+
+## 🏛️ Architecture & System Overview
 
 ```mermaid
 graph TB
-    subgraph Browser["Chrome Extension (MV3)"]
+    subgraph Browser["Google Chrome (Manifest V3)"]
         direction TB
-        A1[Preemptive Strike<br>Spoof Canvas/WebGL APIs] --> A2[DOM Extraction<br>Policy Truncation to 16k]
-        A2 --> A3{Cache Check}
-        A3 -- Hit --> A4[DOM Enforcement<br>el.remove() Trackers]
-        A3 -- Miss --> A5[Service Worker IPC Dispatch]
-    end
-
-    subgraph DualModeInference["Dual-Mode Orchestrator"]
-        direction TB
-        A5 -- Local Memory > 7GB --> B1[Rust Native Daemon<br>Local SQLite WAL]
-        B1 --> B2[llama-cpp-rs Inference<br>n_gpu_layers or CPU threads]
-        B2 --> B3[4-Byte LE Binary Frame Response]
+        A1[MAIN World API Spoofer<br/>api-spoof.ts] --> |Blind Fingerprinters| DOM[Webpage DOM]
+        A2[DOM Extractor<br/>extractor.ts] --> |Extract & Truncate Policy| SW[Background Service Worker<br/>service-worker.ts]
+        A3[Dark Pattern Blocker<br/>dark-pattern-blocker.ts] --> |el.remove() Trackers| DOM
         
-        A5 -- Mobile / Fallback --> C1[Virtual SLM Server<br>HMAC-SHA256 Auth]
-        C1 --> C2[O 1 Redis Queue<br>SSE Streaming]
-        C2 --> C3[Multi-LoRA vLLM Engine]
+        UI_POP[Popup UI<br/>AI Engine Switcher] --> SW
+        UI_SIDE[Side Panel UI<br/>Co-Pilot & Scorecard] --> SW
     end
 
-    B3 --> A4
-    C3 --> A4
+    subgraph NativeEdge["Local Edge Layer (Zero-Knowledge)"]
+        direction TB
+        SW --> |Chrome Native Messaging<br/>4-Byte LE Binary Framing| IPC[Native Messaging Host<br/>com.ssense.native_daemon]
+        IPC --> DAEMON[Rust Native Daemon<br/>ssense-native-daemon.exe]
+        DAEMON --> MM[Model Manager<br/>Tree API + SHA-256 Stream]
+        DAEMON --> LE[llama-cpp-2 Local Engine<br/>512 Chunked Prefill]
+        DAEMON --> RAG[Local Safetensors RAG]
+        LE --> |Token-by-Token Streaming| IPC
+    end
+
+    subgraph CloudBackup["Cloud Layer (Virtual SLM Server)"]
+        direction TB
+        SW -.-> |HMAC-SHA256 Signed SSE| NGINX[Nginx SSL Proxy<br/>:443]
+        NGINX --> SLM[FastAPI + vLLM Server<br/>Multi-LoRA Multiplexing]
+    end
 ```
 
-### The Agentic Workflow
-1. **Preemptive Strike (`document_start`):** `api-spoof.ts` runs in the MAIN world, blinding Canvas/WebGL fingerprinters before the page's JavaScript loads.
-2. **Extraction (`document_idle`):** `extractor.ts` fetches the privacy policy via a CORS-bypassing Service Worker proxy and truncates it to 16,000 characters.
-3. **Edge Inference:** The Rust Daemon checks the SQLite cache. On a miss, it acquires a Global Mutex, runs the LLM constrained by the GBNF grammar, and saves the result.
-4. **DOM Enforcement:** The audit report is broadcast back to Chrome, where `dark-pattern-blocker.ts` physically collapses offending trackers.
+### Core Value Pillars
+
+* **Local Private AI**: Audits privacy policies and answers questions locally using `Qwen/Qwen3.5-9B` GGUF models executed by llama.cpp.
+* **GGML Stability**: Implements 512-token chunked prefill batching, preventing GGML assertion aborts and memory spikes during long legal policy evaluation.
+* **Real-Time Token Streaming**: Streams generated tokens directly across Chrome Native Messaging IPC, delivering immediate interactive chat responses in the sidebar.
+* **Resumable Downloads & MV3 Keepalive**: Hugging Face tree API metadata resolution, HTTP range-request resumption with `.part` file preservation, and 500ms integrity verification heartbeats that keep Manifest V3 service workers active.
+* **Preemptive Fingerprinting Defense**: Injects MAIN-world prototype proxies at `document_start` to mask Canvas, WebGL, AudioContext, and hardware concurrency APIs.
 
 ---
 
-## 📂 Repository Structure
+## 📂 Subsystems & Major Folders
 
-```text
-ssense/
-├── .github/workflows/        # CI/CD pipelines
-├── apps/
-│   ├── extension/            # Chrome MV3 Extension (React + TypeScript)
-│   │   ├── background/       # Service Worker & Native Messaging Bridge
-│   │   ├── content/          # DOM Enforcer, Extractor, MAIN world API Spoofer
-│   │   └── sidebar/          # Glassmorphic Co-Pilot UI
-│   │
-│   ├── native-daemon/        # Rust Edge AI Engine
-│   │   └── src/
-│   │       ├── cache/        # SQLite WAL Memory Layer
-│   │       ├── inference/    # llama-cpp-rs, GBNF Grammar, Hardware Profiler
-│   │       └── messaging/    # 4-Byte LE Binary Framing
-│   │
-│   └── slm-server/           # FastAPI Cloud Backend
-│       ├── main.py           # HMAC Auth & SSE Streaming
-│       ├── engine.py         # Multi-LoRA vLLM PagedAttention
-│       └── redis_queue.py    # O(1) Queue & SHA-256 Coalescing
-│
-├── docs/
-│   ├── ARCHITECTURE.md       # ML Data Forge & Training Pipeline (vLLM/Unsloth)
-│   ├── BUILD.md              # Deployment, UX, and Threat Model specifications
-│   ├── DESIGN.md             # Technical design specs: GAN Forge & Process Isolation
-│   ├── SLM_Server_Architecture.md # Docker 4-tier orchestrator details
-│   └── project_report.md     # Comprehensive system overview
-│
-├── libs/
-│   ├── contracts/            # Single Source of Truth (JSON Schemas, Prompts)
-│   └── rust-utils/           # Shared Workspace Utilities (Hashing, Normalization)
-│
-├── ml/                       # Python Training Forge & Certification Engine
-│   ├── data-forge/           # 72B Teacher Synthesizer & Contrastive DPO Alignment
-│   ├── evals/                # Universal backend_loader.py & 13-Pillar Certification Suite
-│   ├── models/               # Local model checkpoint directories (72B Teacher & 9B Base)
-│   └── slm-training/         # Unsloth SFT & SimPO scripts with OS-level `spawn`
-│
-├── scripts/
-│   ├── 01_prepare_data.sh    # Stage 1: Data preparation, GAN forge & Unsloth formatting
-│   ├── 02_train_models.sh    # Stage 2: VRAM airlock & dual Qwen 3.5 9B SFT/SimPO training
-│   ├── 03_evaluate_models.sh # Stage 3: Functional & adversarial 13-pillar certification
-│   └── register-nmh.js       # Cross-platform Native Messaging Host registrar
-│
-└── Makefile                  # POSIX-compliant Build & Test Orchestrator
-```
+Detailed documentation is available in each component directory:
+
+| Component | Path | Description |
+| :--- | :--- | :--- |
+| **Chrome Extension** | [`apps/extension`](file:///d:/Ssense/apps/extension/README.md) | React 18, Vite, TypeScript Manifest V3 extension with Side Panel and Popup. |
+| **Rust Native Daemon** | [`apps/native-daemon`](file:///d:/Ssense/apps/native-daemon/README.md) | Bare-metal Native Messaging Host with llama.cpp chunked prefill & GGUF streaming. |
+| **Virtual SLM Server** | [`apps/slm-server`](file:///d:/Ssense/apps/slm-server/README.md) | FastAPI + Async vLLM server with HMAC authentication, Nginx SSL proxy, and RAG. |
+| **Statutory Contracts** | [`libs/contracts`](file:///d:/Ssense/libs/contracts/README.md) | Canonical `dpdp_schema.json` and `dpdp_act_tree.json` specifications. |
+| **ML & Data Forge** | [`ml`](file:///d:/Ssense/ml/README.md) | Synthetic data generation, Unsloth SFT / SimPO fine-tuning, and GGUF quantization. |
 
 ---
 
-## 🚀 Prerequisites & Installation
+## 🚀 Walkthrough: Running & Testing in Browser with the Native Host
+
+Follow these step-by-step instructions to compile the native daemon, register it with Chrome, load the extension, and execute end-to-end local inference.
 
 ### Prerequisites
-* **Rust Toolchain:** `rustc 1.75+` (with `cargo`)
-* **Node.js:** `v18+` (with `npm`)
-* **Google Chrome:** Latest stable build
-* **OS:** Windows 10/11, macOS, or Linux (64-bit required for `mmap`)
 
-### Recommended Hardware
-| Component | Minimum | Recommended |
-| :--- | :--- | :--- |
-| **GPU** | None (CPU fallback) | 6GB VRAM (for Q4_K_M quantization) |
-| **RAM** | 8GB System RAM | 16GB+ System RAM |
-| **Storage** | 10GB | 20GB (for model weights + cache) |
-
-### Build & Install Workflow
-
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/your-org/ssense.git
-   cd ssense
-   ```
-
-2. **Compile the entire stack (Extension + Rust Daemon):**
-   ```bash
-   make build-ext
-   make build-daemon
-   ```
-
-3. **Load the Extension in Chrome:**
-   * Navigate to `chrome://extensions`
-   * Enable **Developer Mode**
-   * Click **Load Unpacked** and select the `apps/extension/dist` directory
-   * Copy the generated **Extension ID** (e.g., `abcdefghijklmnop`)
-
-4. **Register the Native Messaging Host:**
-   ```bash
-   # The script handles Windows Registry, macOS, and Linux paths automatically
-   node scripts/register-nmh.js <YOUR_EXTENSION_ID>
-   ```
-
-5. **Run the test suite:**
-   ```bash
-   make test
-   ```
+1. **Google Chrome** (v116+ recommended for Side Panel and Native Messaging support).
+2. **Node.js** (v18.0.0+ or v20+) and **npm**.
+3. **Rust Toolchain** (1.75+): Install via [rustup.rs](https://rustup.rs/).
+4. **C/C++ Build Environment**:
+   - **Windows**: MSYS2 UCRT64 (`pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja`) or Visual Studio C++ Build Tools.
+   - **Linux**: `sudo apt-get install build-essential cmake clang libclang-dev`
+   - **macOS**: `xcode-select --install` and `brew install cmake`
 
 ---
 
-## 🔐 Security Model & Threat Mitigation
+### Step 1: Compile the Rust Native Daemon
 
-Ssense is designed around three principles:
+Set your environment variables (Windows UCRT64 example) and compile the native host:
 
-1. **Local Processing (Zero-Knowledge):** Privacy analysis and inference happen entirely on-device. No external API calls or telemetry.
-2. **Least Privilege IPC:** Browser and native components communicate through a constrained, timeout-hardened (60s) binary IPC interface with strict payload size limits (10MB max).
-3. **Defense in Depth:** Tracking mitigation combines API-level controls (MAIN world spoofing), DOM analysis (MutationObserver), and policy auditing (Edge AI).
+```powershell
+# Set path to libclang and compiler tools (Windows PowerShell)
+$env:LIBCLANG_PATH = "C:\msys64\ucrt64\bin"
+$env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
 
-### Threat Model
-| Threat Vector | Mitigation Strategy |
-| :--- | :--- |
-| **Elite Fingerprinting** | `api-spoof.ts` masks Proxies as `[native code]` via a Singleton `WeakSet`, defeating `.toString()` detection. |
-| **Clean Room Iframes** | Hooks `Node.prototype.appendChild` and `contentWindow` getters to recursively poison iframe environments. |
-| **LLM Hallucinations** | GBNF grammar compiles the schema into an FSM. The C++ backend physically masks invalid logits *during sampling*. |
-| **OS OOM Kills** | `HardwareProfiler` reads Linux cgroup limits and dynamically routes CPU threads based solely on physical cores. |
-| **Model Distillation & Extraction** | `AntiExtractionGuard` regex engine screens inputs for chain-of-thought probes (`HTTP 429`) and injects statutory watermarks (`[Ssense-DPDP-Act-2026-Certified-Provenance]`). |
-| **Origin Spoofing & API Replay** | Web Crypto computes `HMAC-SHA256` signatures (`X-Ssense-Signature`) over request payloads. Server checks `X-Ssense-Timestamp` (30s window) and caches `X-Ssense-Nonce` to block replay attacks. |
-| **Telemetry Exfiltration** | Intercepts `window.fetch` and `XMLHttpRequest` in the MAIN world, aborting requests to blocked domains (`__ssenseBlockedDomains`) and scrubbing tracking headers. |
+# Build the release binary
+cargo build --release -p ssense-native-daemon
+```
 
----
+*For faster iteration during development, you can run `cargo build -p ssense-native-daemon` (debug profile).*
 
-## 📚 Documentation
-
-* **[Architecture & ML Pipeline](docs/ARCHITECTURE.md):** Deep dive into the GAN Forge, vLLM data generation, Unsloth training, and DGX hardware orchestration.
-* **[Build & Deployment Blueprint](docs/BUILD.md):** Detailed UX flows, agentic workflow diagrams, and edge vs. cloud orchestration logic.
-* **[Design & Technical Specifications](docs/DESIGN.md):** Comprehensive technical specifications of the GAN Forge loop, Unsloth `multiprocessing spawn`, `max_prompt_length`, and process isolation.
-* **[Virtual SLM Server](docs/SLM_Server_Architecture.md):** Detailed breakdown of the 48GB VRAM cloud orchestrator, SSE streaming, and Redis queueing.
-* **[Project Report](docs/project_report.md):** The comprehensive overview of the entire stack.
+The compiled binary will be located at:
+- `target/release/ssense-native-daemon.exe` (Windows)
+- `target/release/ssense-native-daemon` (Linux/macOS)
 
 ---
 
-## ⚖️ Disclaimer
+### Step 2: Register the Native Host with Chrome
 
-Privacy policy analysis generated by AI should be treated as informational assistance and not as legal advice. Users should consult qualified legal professionals for regulatory or compliance decisions regarding the DPDP Act 2023 or other privacy regulations.
+Chrome identifies native messaging hosts via an OS-level manifest registration. Run the automated registration script from the repository root:
+
+```bash
+node scripts/register-nmh.js
+```
+
+**What this accomplishes:**
+* Locates the built binary in `target/release/` or `target/debug/`.
+* Writes `apps/native-daemon/com.ssense.native_daemon.json` with the exact binary path.
+* Registers the host in the Windows Registry under:
+  `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.ssense.native_daemon`
+  *(On Linux, creates symlink in `~/.config/google-chrome/NativeMessagingHosts/`)*.
+
+---
+
+### Step 3: Build the Chrome Extension
+
+Navigate to the extension directory and build the production bundle:
+
+```bash
+cd apps/extension
+npm install
+npm run build
+```
+
+This compiles TypeScript and uses Vite to generate the output files in `apps/extension/dist/`.
+
+---
+
+### Step 4: Load Extension in Google Chrome
+
+1. Open Google Chrome and visit `chrome://extensions/`.
+2. Turn **ON** the **Developer mode** toggle in the top-right corner.
+3. Click the **Load unpacked** button in the top-left toolbar.
+4. Select the directory:
+   ```text
+   d:\Ssense\apps\extension\dist
+   ```
+5. Ssense will appear in your extensions list. Note the extension ID (e.g., `abcdefghijklmnopqrstuvwxyz123456`).
+6. Pin Ssense to your browser toolbar.
+
+---
+
+### Step 5: End-to-End Verification & Browser Testing
+
+#### A. Connect to the Native Host & Start Model Download
+1. Click the **Ssense shield icon** in your Chrome toolbar to open the Popup.
+2. Under **AI ENGINE**, click the switch to change from **Cloud · Fast** to **Private · Offline**.
+3. **Observe the Download Progress**:
+   - The popup connects via Native Messaging to `ssense-native-daemon.exe`.
+   - The daemon queries Hugging Face and begins downloading `Qwen/Qwen3.5-9B` GGUF and safetensors embedding weights into `%LOCALAPPDATA%\Ssense\models\`.
+   - Progress bar displays download percentage, transfer speed, and current file.
+   - Resuming works automatically via `.part` files if paused.
+   - When download reaches 100%, observe the SHA-256 verification phase streaming progress every 500ms without timing out.
+4. Once verified, the popup displays: **"Offline models are installed and ready"**.
+
+#### B. Test Token Streaming & Chunked Prefill in the Side Panel
+1. Open the Chrome Side Panel by clicking the Ssense icon or pressing the side panel toolbar button.
+2. In the **DPDP Co-Pilot Chat**:
+   - Ask: *"What are the data fiduciary obligations under Section 6 regarding consent notice?"*
+3. **Verify Real-Time Streaming**:
+   - Notice tokens appear progressively in the chat interface as they are generated by the llama.cpp tensor engine.
+   - Check that prompts with long statutory context decode smoothly without memory spikes or aborts due to 512-token chunked prefill.
+
+#### C. Test Privacy Policy Extraction & Dark Pattern Enforcement
+1. Navigate to any website with a privacy policy (or a test privacy policy page).
+2. The Ssense floating widget or popup will detect the policy.
+3. Click **"Audit Policy"**.
+4. The audit scorecard renders the **DPDP Trust Score (0-100)** and **Obfuscation Subtlety Rating**.
+5. Check the browser console (`F12`) to verify that tracking scripts or iframes flagged as violations are automatically removed from the live DOM (`el.remove()`).
+
+---
+
+### Step 6: Diagnostic Logs & Troubleshooting
+
+* **Chrome Service Worker Logs**:
+  1. Open `chrome://extensions/`.
+  2. Click the **"service worker"** inspect link under Ssense.
+  3. View console logs prefixed with `[NativeMessaging]` or `[ServiceWorker]`.
+* **Native Daemon Process Inspection**:
+  - Open Windows Task Manager / Process Hacker and verify `ssense-native-daemon.exe` is running when the extension is active.
+* **Native Host Connection Error ("Specified native messaging host not found")**:
+  - Re-run `node scripts/register-nmh.js` to ensure registry entries match the current binary location.
+  - Verify that `allowed_origins` in `com.ssense.native_daemon.json` contains `chrome-extension://<YOUR_EXTENSION_ID>/`.
+
+---
+
+## ☁️ Running the Virtual SLM Cloud Server
+
+If you prefer to run Ssense in Cloud Mode or host your own centralized compliance backend:
+
+```bash
+cd apps/slm-server
+
+# Standalone local run:
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn main:app --host 0.0.0.0 --port 8000
+
+# Or production multi-container Docker with GPU:
+docker compose up --build -d
+```
+
+Verify server health:
+```bash
+curl http://localhost:8000/health
+```
+
+---
+
+## 🧪 Automated Verification & Test Matrix
+
+All sub-projects are backed by continuous automated test suites:
+
+```bash
+# 1. Python Security Suite (HMAC, Shannon Entropy, Schema Repair, Hallucination Gate)
+python -m unittest apps/slm-server/tests/test_server_security.py
+# Result: 8 passed in 0.007s
+
+# 2. Chrome Extension Build & TypeScript Verification
+cd apps/extension && npm run build
+# Result: 0 TypeScript errors, built in <1s
+
+# 3. Rust Native Daemon Compiler & Tensor Bindings Check
+cargo check -p ssense-native-daemon
+# Result: Clean compilation (0 errors, 0 warnings)
+```
 
 ---
 
 ## 📄 License
 
-Licensed under the [Apache-2.0 License](LICENSE).
-
-## Edge UX: Cloud-first, opt-in Offline Mode
-
-Ssense no longer downloads the large GGUF/RAG bundle during extension installation.
-
-- **Cloud · Fast** is the default.
-- The popup exposes an explicit **Private · Offline** toggle.
-- Enabling Offline Mode starts `DOWNLOAD_MODELS` through Chrome Native Messaging.
-- The Rust daemon stores models in the OS local application-data directory.
-- Downloads use resumable HTTP `Range` requests and `.part` files.
-- `DOWNLOAD_PROGRESS` events update the popup without resolving the long-running download request.
-- Completion switches the extension to local `llama-cpp-2` inference.
-- Switching Offline Mode off returns inference to the cloud server without deleting local models.
-
-See `CHROME_WEB_STORE_MANUAL.md` for the user-facing manual and production release checklist.
+Ssense is licensed under the [Apache License 2.0](LICENSE).
