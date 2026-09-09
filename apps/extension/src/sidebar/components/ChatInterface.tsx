@@ -372,6 +372,31 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
     `Explain their retention policy.`
   ] : [];
 
+  // Shared by the manual "Audit" toolbar button and the error-state retry
+  // button below — re-runs the audit using an existing snapshot if one is
+  // available, or falls back to re-extracting the policy from the page if
+  // not (e.g. the first automatic attempt failed before ever saving one).
+  const runAudit = useCallback(async () => {
+    if (!domain || isThinking) return;
+    setIsThinking(true);
+    setAuditError('');
+    try {
+      const snap = await chrome.runtime.sendMessage({ type: 'GET_PRIVACY_SNAPSHOT', domain });
+      if (!snap?.success) {
+        const retryRes = await chrome.runtime.sendMessage({ type: 'RETRY_EXTRACTION' });
+        if (!retryRes?.success) throw new Error(retryRes?.error || 'Could not scan this page for a privacy policy.');
+        return;
+      }
+      const res = await chrome.runtime.sendMessage({ type: 'AUDIT_POLICY', domain, policyText: snap.snapshot.policyText });
+      if (res?.type === 'ERROR') throw new Error(res.error || 'Audit failed.');
+    } catch (err) {
+      setAuditError(err instanceof Error ? err.message : 'Audit failed.');
+      setServiceAvailable(false);
+    } finally {
+      setIsThinking(false);
+    }
+  }, [domain, isThinking]);
+
   return (
     <div className="ssense-root">
       <div style={{ position: 'absolute', top: '-30%', left: '50%', transform: 'translateX(-50%)', width: '120%', height: '60%', background: `radial-gradient(circle, ${trustScore !== null && trustScore < 50 ? 'rgba(244, 63, 94, 0.06)' : 'rgba(6, 182, 212, 0.04)'} 0%, transparent 70%)`, pointerEvents: 'none', zIndex: 0, filter: 'blur(40px)' }} />
@@ -427,6 +452,15 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
           </button>
           <span className="ssense-toolbar-spacer" />
           <button
+            className="ssense-toolbar-btn"
+            onClick={runAudit}
+            disabled={!domain || isThinking || isSystemPage}
+            title="Run (or re-run) a fresh audit of this site's privacy policy"
+            style={{ opacity: (!domain || isSystemPage) ? 0.5 : 1, cursor: (!domain || isSystemPage) ? 'default' : 'pointer' }}
+          >
+            <span aria-hidden="true">{isThinking ? '⏳' : '📋'}</span><span>{isThinking ? 'Auditing…' : 'Audit'}</span>
+          </button>
+          <button
             className={`ssense-toolbar-btn${showShieldSettings ? ' ssense-toolbar-btn--active' : ''}`}
             onClick={() => setShowShieldSettings(!showShieldSettings)}
             title="Configure Active DOM & Network Shield"
@@ -462,22 +496,7 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
           <strong>Audit unavailable.</strong> {auditError}
           <div style={{ marginTop: 5, color: 'var(--ssense-text-muted)' }}>No compliance score is shown until a complete, validated report is available.</div>
           <button
-            onClick={async () => {
-              if (!domain || isThinking) return;
-              setIsThinking(true);
-              setAuditError('');
-              try {
-                const snap = await chrome.runtime.sendMessage({ type: 'GET_PRIVACY_SNAPSHOT', domain });
-                if (!snap?.success) throw new Error(snap?.error || 'No retrieved privacy policy is available to retry.');
-                const res = await chrome.runtime.sendMessage({ type: 'AUDIT_POLICY', domain, policyText: snap.snapshot.policyText });
-                if (res?.type === 'ERROR') throw new Error(res.error || 'Retry failed.');
-              } catch (err) {
-                setAuditError(err instanceof Error ? err.message : 'Retry failed.');
-                setServiceAvailable(false);
-              } finally {
-                setIsThinking(false);
-              }
-            }}
+            onClick={runAudit}
             disabled={isThinking}
             style={{ marginTop: 8, border: '1px solid rgba(245,158,11,.3)', background: 'transparent', color: 'var(--ssense-accent-amber)', borderRadius: 6, padding: '5px 8px', fontSize: 9.5, cursor: 'pointer' }}
           >

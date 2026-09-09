@@ -224,6 +224,20 @@ async function extractPolicyText(url: string): Promise<string | null> {
 // ═══════════════════════════════════════════════════════════════
 // MAIN EXECUTION
 // ═══════════════════════════════════════════════════════════════
+
+// Every early-return below used to just console.warn and stop — the side
+// panel never learned the audit couldn't proceed, so it stayed on "Scanning"
+// forever with no error and no retry option. This tells the background
+// script (which relays it as the same AUDIT_ERROR broadcast a real inference
+// failure already uses) so the existing retry UI actually shows up.
+function reportFailure(reason: string) {
+  chrome.runtime.sendMessage({
+    type: 'EXTRACTION_FAILED',
+    domain: window.location.hostname,
+    reason,
+  }).catch(() => { /* background may not be listening yet on very early page loads */ });
+}
+
 (async () => {
   console.log('[Ssense] Searching for privacy policy...');
   
@@ -235,6 +249,7 @@ async function extractPolicyText(url: string): Promise<string | null> {
   
   if (!policyUrl) {
     console.log('[Ssense] No privacy policy link found on this page.');
+    reportFailure('No privacy policy link could be found on this page.');
     return;
   }
 
@@ -242,6 +257,7 @@ async function extractPolicyText(url: string): Promise<string | null> {
 
   if (!isSafePublicUrl(policyUrl)) {
     console.warn('[Ssense] Policy URL resolves to a private/internal host. Blocked (SSRF guard).');
+    reportFailure('The detected policy link points to a private/internal address and was blocked for safety.');
     return;
   }
 
@@ -249,13 +265,17 @@ async function extractPolicyText(url: string): Promise<string | null> {
 
   if (!policyText) {
     console.warn('[Ssense] Failed to extract policy text.');
+    reportFailure('Could not fetch or read the privacy policy content (the page may block automated fetches, or the content was too short to analyze).');
     return;
   }
 
-  // Truncate to the SLM server's supported policy-text budget. This keeps
-  // the payload small (network + JSON overhead) and safely inside the
-  // model's context window on the single SLM server (no local daemon mode).
-  const MAX_CHARS = 16000;
+  // Cap payload size before sending it off (network + JSON overhead, keeps
+  // messages well under Chrome's native-messaging size limits). This is a
+  // coarse first pass, not the real safety net — both the Cloud server and
+  // the local daemon do their own precise, token-aware truncation on
+  // whatever text arrives here (see MAX_POLICY_CHARS / the token-budget
+  // check in local_engine.rs on the daemon side).
+  const MAX_CHARS = 20000;
   let safeText = policyText;
   if (safeText.length > MAX_CHARS) {
     safeText = safeText.substring(0, MAX_CHARS);
@@ -285,6 +305,7 @@ async function extractPolicyText(url: string): Promise<string | null> {
     console.log('[Ssense] Privacy snapshot stored and policy queued for audit.');
   } catch (err) {
     console.error('[Ssense] Failed to send policy to Service Worker:', err);
+    reportFailure('Could not hand the extracted policy off to Ssense (the extension may need a page reload).');
   }
 })();
 } // end __ssenseExtractorLoaded guard

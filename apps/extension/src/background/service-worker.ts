@@ -278,6 +278,47 @@ async function handleMessage(message: any, sender: chrome.runtime.MessageSender)
       return { success: true, snapshot: { ...snapshot, policyText: undefined } };
     }
 
+    case 'EXTRACTION_FAILED': {
+      // The content script couldn't get far enough to even call AUDIT_POLICY
+      // (no policy link found, SSRF guard tripped, fetch/extraction failed).
+      // Relay it as the same AUDIT_ERROR broadcast a real inference failure
+      // already uses, so the side panel's existing retry UI shows up instead
+      // of leaving "Scanning" stuck forever with no feedback at all.
+      chrome.runtime.sendMessage({
+        type: 'AUDIT_ERROR',
+        domain: message.domain,
+        error: message.reason || 'Could not automatically read this page\'s privacy policy.',
+        errorKind: 'extraction',
+        retryable: true,
+      }).catch(() => {});
+      return { success: true };
+    }
+
+    case 'RETRY_EXTRACTION': {
+      // Used by the side panel's retry button specifically when extraction
+      // itself failed the first time (so there's no existing snapshot to
+      // just re-audit). extractor.ts guards itself with a
+      // window.__ssenseExtractorLoaded flag to avoid double-injection on
+      // normal page loads — a plain re-injection here would be a silent
+      // no-op, so we explicitly clear that flag first to force a genuine
+      // fresh attempt.
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) return { success: false, error: 'No active tab to retry on.' };
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: () => { (window as any).__ssenseExtractorLoaded = false; },
+        });
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['content/extractor.js'],
+        });
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err?.message || 'Could not re-run extraction on this page.' };
+      }
+    }
+
     case 'GET_PRIVACY_SNAPSHOT': {
       const snapshot = await privacyStore.getSnapshot(String(message.domain || ''));
       if (!snapshot) return { success: false, error: 'No privacy-policy snapshot is available for this site yet.' };

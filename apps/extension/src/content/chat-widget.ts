@@ -44,6 +44,7 @@ const WIDGET_CSS = `
     background: #09090B; border: 1px solid rgba(255,255,255,0.1); border-radius: 14px;
     box-shadow: 0 12px 40px rgba(0,0,0,0.5); display: flex; flex-direction: column; overflow: hidden;
   }
+  .panel[hidden] { display: none; }
   .panel-header {
     display: flex; align-items: center; justify-content: space-between;
     padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.08);

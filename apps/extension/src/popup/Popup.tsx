@@ -5,8 +5,8 @@ type DownloadState = 'idle' | 'downloading' | 'paused' | 'stalled' | 'ready' | '
 
 // If we're supposedly "downloading" but haven't heard a progress event in this long,
 // the daemon/service worker that was driving it is dead (e.g. Chrome was closed
-// mid-download) — not just between its ~2Hz progress ticks.
-const STALL_DETECT_MS = 12_000;
+// mid-download) — not just between its ~2Hz progress ticks or hashing.
+const STALL_DETECT_MS = 45_000;
 
 interface Progress {
   file: string;
@@ -170,6 +170,13 @@ export default function Popup() {
     setError('');
     setLastError('');
     setDownloadState('downloading');
+    // Set immediately, not after the download resolves: SET_OFFLINE_MODE's
+    // response doesn't come back until the ENTIRE multi-GB download finishes
+    // (see executeDownloadModels in the background), which left the header
+    // reading "Cloud · Fast" for the whole download and silently broke the
+    // toggle's own on/off click routing (it reads this same mode value) for
+    // that entire window too.
+    setMode('offline');
     try {
       const response = await chrome.runtime.sendMessage({
         type: 'SET_OFFLINE_MODE',
@@ -179,13 +186,17 @@ export default function Popup() {
       });
 
       if (response?.success && response?.offlineMode) {
-        setMode('offline');
         setDownloadState('ready');
       } else if (response?.type === 'ERROR' || response?.success === false) {
+        // Genuine failure to even start/complete setup — offline was never
+        // actually usable, so it's correct (not confusing) to fall back to
+        // Cloud here specifically.
+        setMode('cloud');
         setDownloadState('error');
         setError(response?.error || 'Could not enable Offline Mode.');
       }
     } catch (err: any) {
+      setMode('cloud');
       setDownloadState('error');
       setError(err?.message || 'The extension could not start Offline Mode.');
     }

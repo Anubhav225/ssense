@@ -28,6 +28,16 @@ function getPort(): chrome.runtime.Port {
         return;
       }
 
+      if (message.type === 'CHAT_STREAM_CHUNK') {
+        for (const listener of eventListeners) {
+          try { listener(message); } catch (e) { console.error('[Ssense] Native event listener:', e); }
+        }
+        // Intermediate token chunks stream to listeners without settling the final promise
+        if (!message.is_final) {
+          return;
+        }
+      }
+
       if (message.type === 'STATUS') {
         for (const listener of eventListeners) {
           try { listener(message); } catch (e) { console.error('[Ssense] Native event listener:', e); }
@@ -73,26 +83,39 @@ export function subscribeNativeEvents(listener: (message: DaemonResponse) => voi
 // Chrome can terminate an MV3 service worker after ~30s of apparent idleness,
 // even mid-native-messaging-request — CHAT and AUDIT_POLICY routinely take
 // longer than that (cold-start model loading alone can take well over a
-// minute). If the worker dies while a request is still pending, the promise
-// the UI is awaiting simply never settles: no error, no timeout firing, just
-// a permanent "Formatting legal response..." spinner. A trivial extension API
-// call resets Chrome's idle-eviction clock, so we tick one every 20s for as
-// long as there's at least one request genuinely in flight.
+// minute). In addition to 5s setInterval ticks, we register a chrome.alarms
+// heartbeat to prevent background worker eviction during long offline downloads.
 let keepaliveInterval: ReturnType<typeof setInterval> | null = null;
+const KEEPALIVE_ALARM = 'ssense_native_keepalive';
+
+if (typeof chrome !== 'undefined' && chrome.alarms) {
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === KEEPALIVE_ALARM) {
+      chrome.runtime.getPlatformInfo(() => { /* keepalive alarm tick */ });
+    }
+  });
+}
 
 function startKeepaliveIfNeeded() {
   if (keepaliveInterval) return;
   keepaliveInterval = setInterval(() => {
-    // Any real chrome.* API call resets the idle timer; getPlatformInfo is
-    // cheap and side-effect-free.
     chrome.runtime.getPlatformInfo(() => { /* no-op, just resets the idle clock */ });
-  }, 20000);
+  }, 5000);
+
+  if (typeof chrome !== 'undefined' && chrome.alarms) {
+    chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.25 });
+  }
 }
 
 function stopKeepaliveIfIdle() {
-  if (pendingRequests.size === 0 && keepaliveInterval) {
-    clearInterval(keepaliveInterval);
-    keepaliveInterval = null;
+  if (pendingRequests.size === 0) {
+    if (keepaliveInterval) {
+      clearInterval(keepaliveInterval);
+      keepaliveInterval = null;
+    }
+    if (typeof chrome !== 'undefined' && chrome.alarms) {
+      chrome.alarms.clear(KEEPALIVE_ALARM);
+    }
   }
 }
 
@@ -143,13 +166,25 @@ export const nativeBridge = {
     request: DaemonRequest,
     onChunk: (token: string, isFinal: boolean) => void
   ): Promise<void> {
-    const response = await sendToNativeDaemon(request);
-    if (response.type === 'CHAT_STREAM_CHUNK') {
-      onChunk(response.token, response.is_final);
-    } else if (response.type === 'ERROR') {
-      throw new Error(response.error || 'Local AI model failed to answer.');
-    } else {
-      throw new Error('Local AI returned an unexpected response.');
+    const unsubscribe = subscribeNativeEvents((message: DaemonResponse) => {
+      if (message.type === 'CHAT_STREAM_CHUNK' && message.requestId === request.requestId) {
+        onChunk(message.token, message.is_final);
+      }
+    });
+
+    try {
+      const response = await sendToNativeDaemon(request);
+      if (response.type === 'CHAT_STREAM_CHUNK') {
+        if (response.token) {
+          onChunk(response.token, response.is_final);
+        }
+      } else if (response.type === 'ERROR') {
+        throw new Error(response.error || 'Local AI model failed to answer.');
+      } else {
+        throw new Error('Local AI returned an unexpected response.');
+      }
+    } finally {
+      unsubscribe();
     }
   },
 
