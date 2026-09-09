@@ -55,16 +55,29 @@ pub const ARTIFACTS: &[Artifact] = &[
     },
 ];
 
+#[derive(Debug, Clone)]
+pub struct RepoFileInfo {
+    pub size: u64,
+    pub expected_sha256: Option<String>,
+}
+
 pub struct ModelManager {
     models_dir: PathBuf,
     client: Client,
     download_lock: tokio::sync::Mutex<()>,
     // Cooperative pause flag checked inside the streaming loop of every in-flight
-    // artifact download. Setting it doesn't kill the connection abruptly; each
-    // download finishes writing its current chunk, flushes the `.part` file to
-    // disk, and returns cleanly so the exact same Range-resume path used for a
-    // crashed/closed browser also resumes a user-initiated pause.
+    // artifact download.
     pause_requested: Arc<AtomicBool>,
+    // Active downloading flag so the daemon knows not to terminate if Chrome
+    // temporarily closes its port or goes idle mid-download.
+    is_downloading: Arc<AtomicBool>,
+}
+
+struct DownloadGuard(Arc<AtomicBool>);
+impl Drop for DownloadGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 /// What a single artifact's download attempt ended in. `Paused` is not an error —
@@ -84,17 +97,6 @@ impl ModelManager {
         let models_dir = data_dir.join("models");
 
         let client = Client::builder()
-            // IMPORTANT: do NOT use .timeout() here. reqwest's .timeout() is a total
-            // request deadline covering connect + the *entire* response body — for a
-            // multi-gigabyte model download, any connection slower than
-            // (file_size / STALL_TIMEOUT_SECS) gets forcibly killed mid-transfer even
-            // while it's actively receiving bytes. That's what caused downloads to appear
-            // "stuck": the request silently died and retried from scratch every ~10 minutes.
-            //
-            // connect_timeout only bounds the TCP+TLS handshake (fails fast if the host is
-            // unreachable). read_timeout bounds the gap between individual reads and RESETS
-            // after every successful chunk — exactly what we want to detect a genuinely dead
-            // connection without punishing a slow-but-alive one.
             .connect_timeout(Duration::from_secs(30))
             .read_timeout(Duration::from_secs(STALL_TIMEOUT_SECS))
             .user_agent("Ssense-Daemon/3.0")
@@ -106,13 +108,16 @@ impl ModelManager {
             client,
             download_lock: tokio::sync::Mutex::new(()),
             pause_requested: Arc::new(AtomicBool::new(false)),
+            is_downloading: Arc::new(AtomicBool::new(false)),
         })
     }
 
-    /// Called from the "Pause" button in the extension UI. Cooperative — the
-    /// currently-streaming chunk still finishes, but no further bytes are requested
-    /// after that, and the `.part` file is left on disk exactly as when Chrome is
-    /// closed mid-download, so the existing Range-resume logic picks it back up.
+    /// Whether an offline download is actively running right now.
+    pub fn is_downloading(&self) -> bool {
+        self.is_downloading.load(Ordering::SeqCst)
+    }
+
+    /// Called from the "Pause" button in the extension UI. Cooperative.
     pub fn request_pause(&self) {
         self.pause_requested.store(true, Ordering::SeqCst);
     }
@@ -129,52 +134,31 @@ impl ModelManager {
     }
 
     pub fn get_artifact_path(&self, filename: &str) -> PathBuf {
-        // Look in the OS models directory
         self.models_dir.join(filename)
     }
 
-    /// Executed ONLY when the user explicitly clicks "Download Offline Models" in the extension UI
-    /// Fetches every file's true size directly from Hugging Face's Hub API
-    /// (`/api/models/{repo}`), NOT from HTTP headers on the actual download URLs.
-    ///
-    /// This is deliberate: per-file `HEAD`/`GET` requests to `resolve/main/...` hit
-    /// whatever CDN/proxy is actually serving the bytes, and for repos on Hugging
-    /// Face's newer Xet storage backend that proxy can stream the response via
-    /// chunked transfer-encoding with NO `Content-Length` header at all — for either
-    /// HEAD or GET. When that happens there is nothing to "fill in later," and the
-    /// download percentage is stuck on indeterminate for the whole run no matter how
-    /// the retry/fallback logic downstream is written.
-    ///
-    /// The Hub API sidesteps all of that: it's Hugging Face's own metadata database,
-    /// returned as one plain JSON document, and it lists every file's real byte size
-    /// (`siblings[].lfs.size` for LFS/Xet-tracked files, `siblings[].size` otherwise)
-    /// regardless of how the CDN happens to be streaming that file's actual content
-    /// right now. One request gets sizes for the whole repo up front, reliably.
-    async fn fetch_repo_file_sizes(client: &Client) -> Result<std::collections::HashMap<String, u64>> {
-        let api_url = format!("https://huggingface.co/api/models/{}", HUB_REPO_ID);
-        let resp = client.get(&api_url).send().await.context("Failed to reach Hugging Face Hub API for file sizes")?;
+    /// Fetches all repository files, sizes, and Git LFS sha256 OIDs directly
+    /// from Hugging Face's Tree API (/tree/main?recursive=true).
+    async fn fetch_repo_file_info(client: &Client) -> Result<std::collections::HashMap<String, RepoFileInfo>> {
+        let api_url = format!("https://huggingface.co/api/models/{}/tree/main?recursive=true", HUB_REPO_ID);
+        let resp = client.get(&api_url).send().await.context("Failed to reach Hugging Face Tree API for file metadata")?;
         if !resp.status().is_success() {
-            bail!("Hugging Face Hub API returned {} for {}", resp.status(), api_url);
+            bail!("Hugging Face Tree API returned {} for {}", resp.status(), api_url);
         }
-        let json: serde_json::Value = resp.json().await.context("Hub API response was not valid JSON")?;
-        let siblings = json.get("siblings").and_then(|s| s.as_array()).context("Hub API response had no 'siblings' array")?;
-
-        let mut sizes = std::collections::HashMap::new();
-        for sibling in siblings {
-            let Some(filename) = sibling.get("rfilename").and_then(|v| v.as_str()) else { continue };
-            // LFS/Xet-tracked files carry their real size under lfs.size (the `size`
-            // field at the top level for these is the size of the LFS *pointer* text,
-            // a few hundred bytes, not the actual model weights).
-            let size = sibling
-                .get("lfs")
-                .and_then(|lfs| lfs.get("size"))
-                .and_then(|v| v.as_u64())
-                .or_else(|| sibling.get("size").and_then(|v| v.as_u64()));
-            if let Some(size) = size {
-                sizes.insert(filename.to_string(), size);
-            }
+        let items: Vec<serde_json::Value> = resp.json().await.context("Tree API response was not valid JSON")?;
+        let mut map = std::collections::HashMap::new();
+        for item in items {
+            let Some(path) = item.get("path").and_then(|v| v.as_str()) else { continue };
+            let size = item.get("lfs").and_then(|l| l.get("size")).and_then(|v| v.as_u64())
+                .or_else(|| item.get("size").and_then(|v| v.as_u64()))
+                .unwrap_or(0);
+            let expected_sha256 = item.get("lfs")
+                .and_then(|l| l.get("oid"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_lowercase());
+            map.insert(path.to_string(), RepoFileInfo { size, expected_sha256 });
         }
-        Ok(sizes)
+        Ok(map)
     }
 
     pub async fn ensure_all_available(&self, tx: Option<mpsc::Sender<DaemonResponse>>, req_id: Option<String>) -> Result<()> {
@@ -185,18 +169,10 @@ impl ModelManager {
         // Prevent multiple simultaneous clicks from spawning duplicate downloads
         let _guard = self.download_lock.lock().await;
 
-        // A fresh call to ensure_all_available (initial click, or "Resume") always
-        // starts from a clean pause state — otherwise a pause from a previous run
-        // would immediately abort this one before it reads a single byte.
         self.pause_requested.store(false, Ordering::SeqCst);
+        self.is_downloading.store(true, Ordering::SeqCst);
+        let _download_guard = DownloadGuard(self.is_downloading.clone());
 
-        // ── Aggregate progress across ALL pending artifacts ──
-        // Previously each artifact reported its OWN 0-100% independently, so the
-        // popup would show the bar hit 100%, then reset to 0% and climb to 100%
-        // again for the next file — looking like the download was looping forever
-        // even though it was actually making forward progress through 4 files.
-        // We instead sum the known sizes of every artifact that still needs
-        // downloading up front, and report one running percent across that total.
         let mut pending: Vec<(&'static Artifact, PathBuf, PathBuf, String)> = vec![];
         for artifact in ARTIFACTS {
             let target_path = self.get_artifact_path(artifact.filename);
@@ -216,76 +192,53 @@ impl ModelManager {
             }
         }
 
-        // Authoritative sizes from Hugging Face's Hub API — see fetch_repo_file_sizes'
-        // doc comment for why this replaces per-file HEAD requests entirely. Any
-        // artifact this call can't find a size for (API request failed outright, or
-        // this particular file is missing from the response for some reason) falls
-        // back to being filled in from its own GET response's Content-Length once its
-        // download actually starts, same safety net as before.
+        let repo_files = Self::fetch_repo_file_info(&self.client).await.ok();
         let mut known_total: u64 = 0;
         let mut unknown_size: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
-        match Self::fetch_repo_file_sizes(&self.client).await {
-            Ok(sizes) => {
-                for (artifact, _, _, _) in &pending {
-                    match sizes.get(artifact.url_path) {
-                        Some(size) => known_total += size,
-                        None => {
-                            warn!("Hub API had no size listed for '{}' ({}) — will fall back to its GET response.", artifact.name, artifact.url_path);
-                            unknown_size.insert(artifact.name);
-                        }
+
+        if let Some(ref files) = repo_files {
+            for (artifact, _, _, _) in &pending {
+                if let Some(info) = files.get(artifact.url_path) {
+                    if info.size > 0 {
+                        known_total += info.size;
+                    } else {
+                        unknown_size.insert(artifact.name);
                     }
-                }
-            }
-            Err(e) => {
-                warn!("Could not reach Hugging Face Hub API for file sizes ({}) — falling back to per-file GET responses for the progress total.", e);
-                for (artifact, _, _, _) in &pending {
+                } else {
                     unknown_size.insert(artifact.name);
                 }
             }
+        } else {
+            warn!("Could not retrieve tree metadata from Hugging Face Hub. Falling back to per-chunk headers.");
+            for (artifact, _, _, _) in &pending {
+                unknown_size.insert(artifact.name);
+            }
         }
-        // batch_total is shared mutable state now (not a plain local), since it can grow
-        // mid-batch as GET responses fill in sizes the Hub API lookup couldn't provide.
+
         let batch_total = Arc::new(AtomicU64::new(known_total));
         let shared_downloaded = Arc::new(AtomicU64::new(already_downloaded));
 
-        // ── Sequential downloads, one artifact at a time ──
-        // Previously all pending artifacts downloaded concurrently (each as its own
-        // tokio::spawn task), which splits total available bandwidth across however
-        // many files are in flight at once — a 20 Mbps connection downloading 4 files
-        // at the same time gets ~5 Mbps each, not 20 Mbps for whichever one matters.
-        // Going one file at a time gives each artifact the full connection, and keeps
-        // the aggregate percent bar moving in a single, predictable direction instead
-        // of jumping around as different concurrent tasks report at different rates.
         let mut failures: Vec<String> = vec![];
         let mut was_paused = false;
 
         'artifacts: for (artifact, target_path, temp_path, url) in pending {
             let name = artifact.name;
-            // Only ever count this artifact's size into batch_total once, even across
-            // retries — recomputing `size_already_known` from the set on every attempt
-            // would double (or triple) count it if attempt 1 learned the size from GET
-            // headers, then failed partway through the body and retried.
+            let precomputed_sha = repo_files.as_ref()
+                .and_then(|f| f.get(artifact.url_path))
+                .and_then(|info| info.expected_sha256.as_deref());
             let mut size_already_known = !unknown_size.contains(name);
             for attempt in 1..=MAX_RETRIES {
                 let result = Self::download_file_with_resume(&self.client, &url, &temp_path, name, tx.clone(), req_id.clone(), shared_downloaded.clone(), batch_total.clone(), size_already_known, &self.pause_requested).await;
-                // Whatever happened, any size this attempt could have learned from GET
-                // response headers has already been folded into batch_total by now — a
-                // retry must never re-add it, or the denominator inflates with each retry.
                 size_already_known = true;
                 match result {
                     Ok(DownloadOutcome::Paused) => {
                         info!("⏸ Download paused for '{}' — {} bytes retained on disk for resume.", name, fs::metadata(&temp_path).await.map(|m| m.len()).unwrap_or(0));
                         was_paused = true;
-                        // Pausing stops the whole batch here — the remaining not-yet-started
-                        // artifacts stay untouched on disk (nothing to resume for them since
-                        // they never began), and Resume re-enters this same loop from the top,
-                        // skipping whatever's already finished via the `pending` scan above.
                         break 'artifacts;
                     }
                     Ok(DownloadOutcome::Completed) => {
-                        if let Err(e) = Self::verify_integrity(&self.client, &url, &temp_path, name, artifact.filename).await {
-                            error!("Integrity check for '{}' could not be completed: {}. Discarding partial file and retrying.", name, e);
-                            let _ = fs::remove_file(&temp_path).await;
+                        if let Err(e) = Self::verify_integrity(&self.client, &url, &temp_path, name, artifact.filename, precomputed_sha, tx.clone(), req_id.clone()).await {
+                            error!("Integrity check for '{}' failed on attempt {}: {}", name, attempt, e);
                             if attempt == MAX_RETRIES {
                                 failures.push(format!("Could not verify integrity of {} after {} attempts: {}", name, MAX_RETRIES, e));
                                 continue 'artifacts;
@@ -300,7 +253,6 @@ impl ModelManager {
                     Err(e) => {
                         let msg = e.to_string();
                         if let Some(rest) = msg.strip_prefix("NOT_FOUND:") {
-                            // Non-retryable: the URL is wrong/missing. Don't burn retries on it.
                             error!("'{}' is unavailable at its source and will be skipped: {}", name, rest);
                             failures.push(format!("NOT_FOUND: {}", rest));
                             continue 'artifacts;
@@ -347,29 +299,10 @@ impl ModelManager {
         if failures.is_empty() {
             Ok(())
         } else {
-            // Return Ok rather than propagating a hard error: offline models are optional,
-            // Cloud/Fast mode must keep working, and the UI already got a "partial" status
-            // above with the details. A caller that wants to treat this as fatal can check
-            // is_offline_ready() afterward.
             Ok(())
         }
     }
 
-    /// Verifies the downloaded artifact against the true SHA-256 published in the file's Git
-    /// LFS pointer (fetched in `fetch_authoritative_sha256` below), before the file is ever
-    /// renamed into the models directory and made eligible for loading into llama.cpp.
-    ///
-    /// Fetches the authoritative SHA-256 for an LFS-tracked file straight from its Git LFS
-    /// pointer (`{repo}/raw/{branch}/{path}`), which Hugging Face publishes in plain text as
-    /// `oid sha256:<hex>` for every LFS-tracked path, regardless of which storage backend
-    /// (classic LFS or the newer Xet) actually serves the bytes.
-    ///
-    /// We deliberately do NOT use the `ETag`/`x-linked-etag` HTTP headers for this: those
-    /// only equal the file's SHA-256 for repos still on classic Git LFS. Repos migrated to
-    /// Xet report a *different* content-addressing hash via those same headers — it's also
-    /// 64 hex characters, so it looks exactly like a SHA-256, but it isn't one. Comparing our
-    /// real SHA-256 against it fails every single time, deterministically, on an otherwise
-    /// perfectly good download — which is exactly what was happening here.
     async fn fetch_authoritative_sha256(client: &Client, resolve_url: &str, name: &'static str) -> Result<String> {
         let raw_url = resolve_url.replacen("/resolve/", "/raw/", 1);
         let resp = client.get(&raw_url).send().await.context("Integrity check: failed to fetch LFS pointer")?;
@@ -385,30 +318,68 @@ impl ModelManager {
         bail!("'{}' has no LFS pointer with a sha256 oid at {} — not an LFS/Xet-tracked file, or the pointer format changed", name, raw_url);
     }
 
-    async fn verify_integrity(client: &Client, url: &str, file_path: &Path, name: &'static str, final_filename: &str) -> Result<()> {
-        let expected_sha256 = match Self::fetch_authoritative_sha256(client, url, name).await {
-            Ok(hash) => hash,
-            Err(e) => {
-                warn!(
-                    "No verifiable LFS SHA-256 available from origin for '{}' ({}) — cannot cryptographically verify this download.",
-                    name, e
-                );
-                if final_filename.ends_with(".json") {
-                    // Small, human-inspectable text asset: parse failure at load time is an
-                    // acceptable secondary safety net for this one file type.
-                    return Ok(());
+    async fn verify_integrity(
+        client: &Client,
+        url: &str,
+        file_path: &Path,
+        name: &'static str,
+        final_filename: &str,
+        precomputed_sha: Option<&str>,
+        tx: Option<mpsc::Sender<DaemonResponse>>,
+        req_id: Option<String>,
+    ) -> Result<()> {
+        let expected_sha256 = if let Some(sha) = precomputed_sha {
+            sha.to_string()
+        } else {
+            match Self::fetch_authoritative_sha256(client, url, name).await {
+                Ok(hash) => hash,
+                Err(e) => {
+                    warn!(
+                        "No verifiable LFS SHA-256 available from origin for '{}' ({}) — cannot cryptographically verify this download.",
+                        name, e
+                    );
+                    if final_filename.ends_with(".json") {
+                        return Ok(());
+                    }
+                    bail!("Origin did not provide a verifiable checksum for model weights '{}'; refusing to trust an unverified binary.", name);
                 }
-                bail!("Origin did not provide a verifiable checksum for model weights '{}'; refusing to trust an unverified binary.", name);
             }
         };
 
+        let total_bytes = fs::metadata(file_path).await.map(|m| m.len()).unwrap_or(0);
         let mut file = File::open(file_path).await.context("Integrity check: failed to reopen downloaded file")?;
         let mut hasher = Sha256::new();
         let mut buf = vec![0u8; 1024 * 1024];
+        let mut bytes_hashed = 0u64;
+        let mut last_emit = std::time::Instant::now();
+        let mut bytes_since_last_emit = 0u64;
+
         loop {
             let n = file.read(&mut buf).await.context("Integrity check: read error")?;
             if n == 0 { break; }
             hasher.update(&buf[..n]);
+            bytes_hashed += n as u64;
+            bytes_since_last_emit += n as u64;
+
+            if last_emit.elapsed() >= Duration::from_millis(500) {
+                let elapsed = last_emit.elapsed().as_secs_f64();
+                let mb_per_sec = (bytes_since_last_emit as f64 / 1024.0 / 1024.0) / elapsed;
+                let pct = if total_bytes > 0 {
+                    (bytes_hashed as f64 / total_bytes as f64) * 100.0
+                } else {
+                    -1.0
+                };
+                if let Some(channel) = &tx {
+                    let _ = channel.send(DaemonResponse::DownloadProgress {
+                        request_id: req_id.clone(),
+                        file: format!("Verifying {}...", name),
+                        pct,
+                        mb_per_sec,
+                    }).await;
+                }
+                last_emit = std::time::Instant::now();
+                bytes_since_last_emit = 0;
+            }
         }
         let actual_sha256 = hex::encode(hasher.finalize());
 

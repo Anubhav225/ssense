@@ -88,15 +88,15 @@ impl HardwareProfiler {
         if let Some(disk) = best_match {
             let available_mb = disk.available_space() / 1024 / 1024;
             if available_mb < MIN_REQUIRED_DISK_MB {
-                bail!(
-                    "Insufficient disk space. Ssense Offline Mode requires {} MB free, but only {} MB available on {:?}.",
+                warn!(
+                    "⚠️ [Profiler] Low Disk Space: Ssense Offline Mode requires ~{} MB, but only {} MB is available on {:?}. Offline mode download may require freeing space.",
                     MIN_REQUIRED_DISK_MB,
                     available_mb,
                     disk.mount_point()
                 );
             }
         } else {
-            warn!("⚠️ [Profiler] Could not isolate the exact disk partition for {:?}. Bypassing strict disk check.", data_dir);
+            warn!("⚠️ [Profiler] Could not isolate the exact disk partition for {:?}. Bypassing disk check.", data_dir);
         }
 
         // 4. CPU PROFILE & DYNAMIC THREAD SCALING

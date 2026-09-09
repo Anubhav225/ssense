@@ -18,8 +18,15 @@ use super::grammar::{DPDP_AUDIT_GRAMMAR, validate_grammar};
 use crate::rag_engine::RagEngine;
 
 const MAX_CONTEXT_TOKENS: u32 = 8192;
-const MAX_POLICY_CHARS: usize = 16000; 
+// A generous upper bound for the initial character-count trim - deliberately
+// looser than a tight token estimate would allow, since the precise
+// token-level check in run_inference() is the real safety net that handles
+// dense text correctly (see the middle-truncation logic there). Keeping this
+// too tight (the old 16000) meant long real-world policies lost content
+// unnecessarily even when the actual token budget had room to spare.
+const MAX_POLICY_CHARS: usize = 20000;
 const MAX_GENERATE_TOKENS: u32 = 2048;
+const BATCH_CAPACITY: usize = 512;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelType {
@@ -111,7 +118,7 @@ impl LocalEngine {
             let model = LlamaModel::load_from_file(&self.backend, path, &model_params)
                 .context("Failed to map GGUF to memory.")?;
 
-            let mut model_guard = self.model.lock().unwrap();
+            let mut model_guard = self.model.lock().map_err(|_| anyhow::anyhow!("Model mutex poisoned"))?;
             *model_guard = Some(model);
             *type_guard = required_model;
 
@@ -130,7 +137,7 @@ impl LocalEngine {
         let prompt = self.build_audit_prompt(domain, truncated_policy);
 
         // Audit requires low temp to prevent JSON structural drift
-        let output = self.run_inference(prompt, 0.1, 1.1, Some(DPDP_AUDIT_GRAMMAR))?;
+        let output = self.run_inference_stream(prompt, 0.1, 1.1, Some(DPDP_AUDIT_GRAMMAR), |_| Ok(()))?;
         
         let report = self.parse_audit_response(&output)?;
 
@@ -147,6 +154,20 @@ impl LocalEngine {
         audit_context: &DpdpAuditReport,
         rag_engine: Option<&mut RagEngine>,
     ) -> Result<String> {
+        self.chat_with_context_stream(domain, user_prompt, audit_context, rag_engine, |_| Ok(()))
+    }
+
+    pub fn chat_with_context_stream<F>(
+        &self,
+        domain: &str,
+        user_prompt: &str,
+        audit_context: &DpdpAuditReport,
+        rag_engine: Option<&mut RagEngine>,
+        on_token: F,
+    ) -> Result<String>
+    where
+        F: FnMut(&str) -> Result<()>,
+    {
         let start_time = Instant::now();
 
         self.switch_context(ModelType::Chatbot)?;
@@ -163,7 +184,7 @@ impl LocalEngine {
         let prompt = self.build_chat_prompt(domain, user_prompt, audit_context, &retrieved_context);
 
         // Chat requires higher temp (0.4) for natural flow, and higher repetition penalty (1.15) to prevent loops
-        let output = self.run_inference(prompt, 0.4, 1.15, None)?;
+        let output = self.run_inference_stream(prompt, 0.4, 1.15, None, on_token)?;
         
         let inference_time_ms = start_time.elapsed().as_millis() as u64;
         self.update_metrics(output.len() as u64 / 4, inference_time_ms);
@@ -172,28 +193,80 @@ impl LocalEngine {
     }
 
     // ─────────────────────────────────────────────────────────────────
-    // SOTA SENSE: Hallucination-Protected Inference Loop
+    // SOTA SENSE: Hallucination-Protected Inference Loop with Chunked Prefill & Streaming
     // ─────────────────────────────────────────────────────────────────
-    fn run_inference(&self, prompt: String, temp: f32, rep_pen: f32, grammar: Option<&str>) -> Result<String> {
+    fn run_inference_stream<F>(
+        &self,
+        prompt: String,
+        temp: f32,
+        rep_pen: f32,
+        grammar: Option<&str>,
+        mut on_token: F,
+    ) -> Result<String>
+    where
+        F: FnMut(&str) -> Result<()>,
+    {
         let model_guard = self.model.lock().map_err(|_| anyhow::anyhow!("Mutex poisoned"))?;
         let model = model_guard.as_ref().ok_or_else(|| anyhow::anyhow!("Model not mapped"))?;
 
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(std::num::NonZeroU32::new(MAX_CONTEXT_TOKENS))
+            .with_n_batch(BATCH_CAPACITY as u32)
             .with_n_threads(self.optimal_threads);
         
         let mut ctx = model.new_context(&self.backend, ctx_params)
             .context("Failed to create context")?;
 
-        let tokens = model.str_to_token(&prompt, AddBos::Always)?;
-        let mut batch = LlamaBatch::new(MAX_CONTEXT_TOKENS as usize, 1);
-        
-        for (i, &token) in tokens.iter().enumerate() {
-            batch.add(token, i as i32, &[0], i == tokens.len() - 1)
-                .context("Failed to add token to prefill batch (context window may be too small for this prompt)")?;
+        let mut tokens = model.str_to_token(&prompt, AddBos::Always)?;
+
+        // Reserve room for the model's own generated output within the same
+        // context window (n_ctx covers prompt + generation combined, not
+        // prompt alone). MAX_POLICY_CHARS truncates the INPUT TEXT by
+        // character count before this point, which is only an approximate
+        // proxy for token count — dense/technical text (long real-world
+        // privacy policies included) can tokenize more densely than the
+        // English-average ~4 chars/token this estimate assumes. This is the
+        // precise, direct check: if the actual tokenized prompt still
+        // exceeds the budget, truncate the token list itself rather than
+        // ever handing an oversized batch to the underlying decode() call.
+        let max_prompt_tokens = (MAX_CONTEXT_TOKENS as usize).saturating_sub(MAX_GENERATE_TOKENS as usize);
+        if tokens.len() > max_prompt_tokens {
+            // Both prompt templates (build_audit_prompt, build_chat_prompt) put
+            // the bulky variable content BEFORE the closing
+            // "<|im_end|>\n<|im_start|>assistant\n" turn-cue, not after. Simply
+            // truncating the tail would risk cutting that cue off entirely,
+            // leaving the model with no clear signal to start generating a
+            // response — a correctness bug even though it wouldn't crash.
+            // Instead, keep a generous fixed reserve from the END (comfortably
+            // more than the ~10 tokens that closing cue actually needs) and
+            // trim the excess out of the MIDDLE, where the oversized
+            // policy/context content lives.
+            const TAIL_RESERVE_TOKENS: usize = 32;
+            let head_budget = max_prompt_tokens.saturating_sub(TAIL_RESERVE_TOKENS);
+            info!(
+                "Prompt tokenized to {} tokens, exceeding the {}-token budget reserved for generation — trimming the middle, preserving the prompt's closing structure.",
+                tokens.len(), MAX_GENERATE_TOKENS
+            );
+            let tail: Vec<_> = tokens[tokens.len() - TAIL_RESERVE_TOKENS.min(tokens.len())..].to_vec();
+            tokens.truncate(head_budget);
+            tokens.extend(tail);
         }
 
-        ctx.decode(&mut batch).context("Prefill decode failed")?;
+        let mut batch = LlamaBatch::new(BATCH_CAPACITY, 1);
+        
+        // Chunked prefill in chunks of BATCH_CAPACITY (512 tokens).
+        // This avoids massive scratch memory spikes and GGML batch assertions.
+        for chunk_start in (0..tokens.len()).step_by(BATCH_CAPACITY) {
+            let chunk_end = (chunk_start + BATCH_CAPACITY).min(tokens.len());
+            batch.clear();
+            for i in chunk_start..chunk_end {
+                // logits is true only for the very last token of the entire prompt
+                let is_last = i == tokens.len() - 1;
+                batch.add(tokens[i], i as i32, &[0], is_last)
+                    .context("Failed to add token to prefill batch")?;
+            }
+            ctx.decode(&mut batch).context("Prefill decode failed")?;
+        }
 
         // Build the sampler chain: grammar (optional) -> repetition penalty -> temperature -> top-p -> final draw
         let mut chain_parts: Vec<LlamaSampler> = Vec::new();
@@ -231,6 +304,13 @@ impl LocalEngine {
             if output_text.ends_with("<|im_end|>") {
                 output_text = output_text.trim_end_matches("<|im_end|>").to_string();
                 break;
+            }
+
+            if !text.is_empty() && !text.contains("<|im_end|>") {
+                if let Err(e) = on_token(&text) {
+                    trace!("Token callback error or cancelled: {}", e);
+                    break;
+                }
             }
 
             batch.clear();

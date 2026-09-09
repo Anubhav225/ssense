@@ -13,16 +13,20 @@ if (!EXT_ID) {
 }
 
 // Resolve the absolute path to the compiled Rust binary
-let binPath = resolve(__dirname, '../apps/native-daemon/target/release/ssense-native-daemon');
 const osPlatform = platform();
+const ext = osPlatform === 'win32' ? '.exe' : '';
 
-if (osPlatform === 'win32') {
-  binPath += '.exe';
-}
+const candidatePaths = [
+  resolve(__dirname, '../target/release/ssense-native-daemon' + ext),
+  resolve(__dirname, '../apps/native-daemon/target/release/ssense-native-daemon' + ext),
+  resolve(__dirname, '../target/debug/ssense-native-daemon' + ext),
+  resolve(__dirname, '../apps/native-daemon/target/debug/ssense-native-daemon' + ext),
+];
 
-const checkPath = binPath;
-if (!existsSync(checkPath)) {
-  console.error(`❌ Rust binary not found at ${checkPath}. Run 'make build-daemon' first.`);
+let binPath = candidatePaths.find(p => existsSync(p));
+
+if (!binPath) {
+  console.error(`❌ Rust binary not found in candidates:\n  ${candidatePaths.join('\n  ')}\nRun 'cargo build --release' first.`);
   process.exit(1);
 }
 

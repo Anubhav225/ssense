@@ -46,7 +46,7 @@ hf-hub = { version = "0.3.2", features = ["tokio"] }
 llama-cpp-2 = "=0.1.86"  # Pinned: code uses the pre-rewrite candidates/grammar sampling API
 llama-cpp-sys-2 = "=0.1.86"  # MUST match llama-cpp-2's version exactly (old model-based vocab API, not the newer llama_vocab split)
 fastembed = "5"          # Updated: 3.2 was incompatible with ort 2.0-rc; v5 matches our pinned ort/ndarray versions
-ort = { version = "2.0.0-rc.13", default-features = false, features = ["download-binaries", "tls-rustls"] } # Pin TLS backend to fix ort-sys build error
+ort = { version = "2.0.0-rc.13", default-features = false, features = ["load-dynamic"] } # load-dynamic enables runtime onnxruntime.dll loading on both MSVC and GNU
 ndarray = { version = "0.17", features = ["std"] } # Fix: ort needs ndarray's std feature (NdFloat) enabled explicitly
 safetensors = "0.4"
 memmap2 = "0.9"          # Forces OS to page vectors to SSD
@@ -54,10 +54,3 @@ rayon = "1.10"           # CPU SIMD parallelization for vector math
 bytemuck = "1.15"        # Zero-copy raw pointer casting for memory mapped tensors
 sha2 = "0.10"             # SHA-256 integrity verification for downloaded model artifacts
 hex = "0.4"
-
-[profile.release]
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-panic = "abort"
-strip = true

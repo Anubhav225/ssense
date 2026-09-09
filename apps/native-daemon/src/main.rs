@@ -96,7 +96,7 @@ async fn main() -> Result<()> {
     let state = Arc::new(AppState {
         cache,
         inference_engine,
-        model_manager,
+        model_manager: Arc::clone(&model_manager),
         rag_engine: Arc::new(RwLock::new(rag_engine)),
         inference_lock: Mutex::new(()),
         has_gpu_acceleration: hardware_profile.has_gpu_acceleration,
@@ -107,14 +107,41 @@ async fn main() -> Result<()> {
 
     // ── BACKGROUND WRITER TASK ──
     // Writes responses to Chrome asynchronously to prevent blocking the engine
+    let model_manager_writer = Arc::clone(&model_manager);
     let writer_task = tokio::spawn(async move {
         let mut writer = stdout();
         while let Some(response) = rx.recv().await {
             match serde_json::to_vec(&response) {
                 Ok(bytes) => {
                     if let Err(e) = write_message(&mut writer, &bytes).await {
-                        error!("❌ [Main] Fatal stdout pipe error: {}. Chrome likely killed extension. Exiting.", e);
-                        std::process::exit(1);
+                        match &e {
+                            messaging::framing::FramingError::OutgoingTooLarge(size) => {
+                                // Recoverable: the pipe itself is fine, this ONE response
+                                // (e.g. a long audit report or chat answer) just exceeded
+                                // Chrome's 1MB limit. Drop this message and keep serving
+                                // everything else instead of taking the whole daemon down —
+                                // previously this exact case killed every pending request.
+                                error!("⚠️ [Main] Dropped an oversized response ({} bytes > 1MB Chrome limit). Daemon continues running.", size);
+                            }
+                            messaging::framing::FramingError::WriteTimeout => {
+                                // Also recoverable: OS pipe buffer was momentarily full or
+                                // Chrome briefly suspended the extension (e.g. it was
+                                // backgrounded) — not evidence the connection is actually dead.
+                                error!("⚠️ [Main] IPC write timed out (pipe busy/suspended). Dropped one response, daemon continues running.");
+                            }
+                            _ => {
+                                // Fatal pipe error. If a model download is actively running,
+                                // do NOT crash the daemon with std::process::exit(1) — let the
+                                // download finish saving to disk so bandwidth/progress is not lost.
+                                error!("❌ [Main] Fatal stdout pipe error: {}. Chrome likely closed connection.", e);
+                                if model_manager_writer.is_downloading() {
+                                    warn!("⚠️ [Main] Model download in progress! Suppressing exit so download can finish.");
+                                    break;
+                                } else {
+                                    std::process::exit(1);
+                                }
+                            }
+                        }
                     }
                 }
                 Err(e) => error!("❌ [Main] Failed to serialize IPC response: {}", e),
@@ -130,7 +157,15 @@ async fn main() -> Result<()> {
         let request_bytes = match read_message(&mut reader).await {
             Ok(bytes) => bytes,
             Err(_) => {
-                info!("👋 [Main] Chrome disconnected (EOF). Shutting down daemon cleanly.");
+                if state.model_manager.is_downloading() {
+                    warn!("⚠️ [Main] Chrome disconnected (EOF) while model download is in progress! Keeping daemon alive until download completes...");
+                    while state.model_manager.is_downloading() {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                    info!("✅ [Main] Download completed after Chrome disconnected. Shutting down daemon cleanly.");
+                } else {
+                    info!("👋 [Main] Chrome disconnected (EOF). Shutting down daemon cleanly.");
+                }
                 break;
             }
         };
@@ -253,7 +288,7 @@ async fn main() -> Result<()> {
 fn route_request(
     request: DaemonRequest, 
     state: Arc<AppState>, 
-    _tx: mpsc::Sender<DaemonResponse>, 
+    tx: mpsc::Sender<DaemonResponse>, 
     rt: tokio::runtime::Handle
 ) -> DaemonResponse {
     
@@ -328,14 +363,31 @@ fn route_request(
 
             let mut rag_guard = rt.block_on(async { state.rag_engine.write().await });
 
-            // SOTA FIX: Simulate streaming by executing the monolithic inference 
-            // and chunking it back over IPC. (True llama-cpp-2 streaming requires callbacks).
-            match state.inference_engine.chat_with_context(&req.domain, &req.user_prompt, audit_ref.unwrap(), rag_guard.as_mut()) {
-                Ok(message) => {
-                    // Send message natively to UI
+            let tx_stream = tx.clone();
+            let req_id_stream = req_id.clone();
+            let rt_stream = rt.clone();
+
+            let token_callback = move |token: &str| -> Result<()> {
+                let resp = DaemonResponse::ChatStreamChunk {
+                    request_id: req_id_stream.clone(),
+                    token: token.to_string(),
+                    is_final: false,
+                };
+                let _ = rt_stream.block_on(async { tx_stream.send(resp).await });
+                Ok(())
+            };
+
+            match state.inference_engine.chat_with_context_stream(
+                &req.domain,
+                &req.user_prompt,
+                audit_ref.unwrap(),
+                rag_guard.as_mut(),
+                token_callback,
+            ) {
+                Ok(_message) => {
                     DaemonResponse::ChatStreamChunk {
                         request_id: req_id,
-                        token: message,
+                        token: String::new(),
                         is_final: true,
                     }
                 }
