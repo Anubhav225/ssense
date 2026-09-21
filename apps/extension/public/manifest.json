@@ -1,0 +1,55 @@
+{
+  "manifest_version": 3,
+  "name": "Ssense — DPDP Privacy Shield",
+  "short_name": "Ssense",
+  "version": "2.3.0",
+  "version_name": "2.3.0 (Secure Zero-Config)",
+  "description": "Instant DPDP Act 2023 compliance auditing for every site you visit. AI-powered trust scoring, violation detection, and a live legal co-pilot. Zero setup — works the moment you install.",
+  "author": "Ssense Engineering",
+  "homepage_url": "https://ssense.app",
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "scripting",
+    "tabs",
+    "notifications"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/api-spoof.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": [
+        "content/extractor.js",
+        "content/dark-pattern-blocker.js",
+        "content/chat-widget.js"
+      ],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Open Ssense Privacy Shield",
+    "default_popup": "popup.html"
+  },
+  "icons": {
+    "16":  "icons/icon16.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

@@ -1,0 +1,126 @@
+# ==============================================================================
+# Ssense Monorepo .gitignore
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Environment Variables & Secrets (CRITICAL: Never commit real keys/secrets)
+# ------------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.cert
+*.crt
+
+# ------------------------------------------------------------------------------
+# Node.js / Chrome Extension (apps/extension)
+# ------------------------------------------------------------------------------
+node_modules/
+dist/
+build/
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.turbo/
+
+# ------------------------------------------------------------------------------
+# Python & Machine Learning (ml/ & apps/slm-server)
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Build & packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing & Cache
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.cache/
+.humming/
+
+# ML Large Model Weights & HuggingFace Checkpoints (>100MB rejected by GitHub)
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.onnx
+*.h5
+*.hdf5
+*.ckpt
+*.gguf
+
+# Whitelist small RAG index embedding table (<1MB)
+!ml/models/rag-index/dpdp_embeddings.safetensors
+
+# HuggingFace and local base model directories
+ml/models/base/
+ml/models/.cache/
+ml/models/*-gguf/
+ml/models/*-gguf_gguf/
+
+# ------------------------------------------------------------------------------
+# Rust / Cargo (libs/rust-utils & root)
+# ------------------------------------------------------------------------------
+/target/
+target/
+**/*.rs.bk
+
+# ------------------------------------------------------------------------------
+# Databases & Local Runtime Storage
+# ------------------------------------------------------------------------------
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite3-journal
+apps/slm-server/data/*
+!apps/slm-server/data/.gitkeep
+
+# ------------------------------------------------------------------------------
+# Logs & Scratch Scripts
+# ------------------------------------------------------------------------------
+*.log
+docker_logs*.txt
+powershell.bat
+
+# ------------------------------------------------------------------------------
+# Operating System & IDE Artifacts
+# ------------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

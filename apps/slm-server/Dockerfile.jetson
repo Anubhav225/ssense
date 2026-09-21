@@ -1,0 +1,68 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# SOTA SLM SERVER DOCKERFILE (Jetson AGX-class edge device: Orin / Spark)
+# ═══════════════════════════════════════════════════════════════════════════
+# Same base model + multi-LoRA mechanism as the gpu profile - only the
+# engine tuning (engine.py's _build_jetson_args) and this base image differ.
+#
+# NOTE: vLLM's ARM64/Jetson (L4T) wheel availability changes across releases.
+# This Dockerfile documents the intended build path; verify the vLLM version
+# pinned here actually ships a compatible ARM64+CUDA wheel for your specific
+# JetPack/L4T version before deploying, and adjust the vLLM install step if
+# not (building from source against the device's installed CUDA/cuDNN is the
+# fallback documented in vLLM's own ARM64 installation guide).
+
+# 1. NVIDIA L4T (Linux for Tegra) base - matches Jetson's CUDA/cuDNN stack.
+#    Pin the exact r36.x tag matching your JetPack version on-device.
+FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    VLLM_WORKER_MULTIPROCESS_METHOD=spawn \
+    RAY_DISABLE_MEMORY_MONITOR=1 \
+    HF_HOME=/app/.cache/huggingface \
+    MODELS_DIR=/app/models \
+    SSENSE_COMPUTE_PROFILE=jetson
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3-pip python3.11-dev curl git gosu \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. vLLM on Jetson: PyTorch for Jetson must come from NVIDIA's Jetson Zoo
+# wheels (matches the device's own CUDA build), NOT the standard PyPI wheel.
+# vLLM itself may need building from source against that PyTorch - see
+# https://docs.vllm.ai/en/latest/getting_started/installation/gpu.html#arm64
+# for the current recommended path for your pinned vLLM version.
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 3. Copy the microservice source code
+COPY . /app
+
+# 4. Create the non-root runtime user, but do NOT switch to it here with
+# USER. docker-compose.yml bind-mounts host directories into /app/models and
+# /app/.cache/huggingface, owned by whatever host user ran `docker compose
+# up` — not by `ssense`. Switching here would make writes into those mounts
+# fail with PermissionError. docker-entrypoint.sh runs first as root, fixes
+# ownership of just those two directories, then drops to `ssense` via gosu
+# before exec'ing uvicorn. Jetson/L4T GPU device nodes are typically
+# world-accessible under the default nvidia-container-runtime config on
+# JetPack, so dropping privileges this way should not affect GPU access —
+# if you do see permission errors against /dev/nvhost-* on your specific
+# L4T image, that's the first thing to check.
+RUN groupadd -r ssense && useradd -r -g ssense -d /app -s /sbin/nologin ssense \
+    && mkdir -p /app/.cache/huggingface /app/models /app/data \
+    && chown -R ssense:ssense /app
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["docker-entrypoint.sh"]
+
+EXPOSE 8000
+
+# Longer start-period than the gpu profile: Jetson's shared unified-memory
+# bandwidth means model loading is typically slower than a discrete-GPU node.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=150s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

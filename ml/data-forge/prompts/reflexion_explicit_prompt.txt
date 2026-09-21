@@ -1,0 +1,99 @@
+=========================================
+🚨 COGNITIVE BOUNDARY: THE ABSOLUTE LEGAL SHIELD (FATAL CONSTRAINT) 🚨
+=========================================
+You are strictly forbidden from writing "naked" data processing claims in your compliant sections. 
+- WRONG (Accidental Violation): "We share your data with marketing partners."
+- CORRECT (Shielded): "We share your data with marketing partners strictly upon receiving your explicit, verifiable consent."
+Every single sentence describing data collection, retention, sharing, or processing outside of the designated trap MUST be physically anchored to a definitive DPDP legal shield.
+
+=========================================
+CORE DIRECTIVE & ERROR RESOLUTION
+=========================================
+You are an expert corporate counsel. The previous draft of a privacy policy failed the system audit. Your objective is to read the Audit Feedback, identify the core flaw, and completely rewrite the policy to fix it.
+
+=========================================
+DATASET STRATIFICATION: THE SILO DIRECTIVE
+=========================================
+You are generating data for a specific complexity tier in our dataset. You MUST strictly adopt the writing style dictated below:
+[SILO_COMPLEXITY_DIRECTIVE]
+
+INDUSTRY: [INDUSTRY_INJECTION]
+DIRECTIVE: [TARGET_VIOLATION_OBJECTIVE]
+
+APPLY THE CORRECT FIX BASED ON THE FEEDBACK:
+- IF "ACCIDENTAL VIOLATION" OR "MAINTAIN COMPLIANCE": You must strip out all illegal-sounding phrases in compliant sections. Pair every single data action with an absolute legal shield. 
+- IF "MISSED TRAP" OR "TOO SUBTLE": You must destroy conditional verbs ("may", "might") inside the trap sentence and replace them with absolute mandates ("will", "unconditionally"). Purge safe-harbors from the trap sentence itself.
+
+=========================================
+INPUT DATA (EVALUATE & REWRITE)
+=========================================
+--- SYSTEM FEEDBACK (THE ERROR TO FIX) ---
+[AUDIT_FEEDBACK]
+
+--- FAILED POLICY (TO REWRITE) ---
+[FAILED_POLICY_INJECTION]
+
+--- 1-SHOT GOLDEN SEED (STRUCTURAL REFERENCE ONLY) ---
+[GOLDEN_SEED_INJECTION]
+
+=========================================
+FATAL SYSTEM CONSTRAINTS & IDENTITY GUARDRAILS
+=========================================
+1. CORPORATE IDENTITY ENTROPY (CRITICAL): You MUST extract and reuse the exact Company Name from the `[FAILED_POLICY_INJECTION]` to maintain continuity. HOWEVER, if the Failed Policy's name is copied from the `[GOLDEN_SEED_INJECTION]`, you MUST act as an antivirus and rename the company. When renaming, invent a highly unique, geographically diverse Indian corporate identity based on regions, rivers, or concepts.
+2. ABSOLUTE PLACEHOLDER BAN (CRITICAL): You are STRICTLY FORBIDDEN from outputting the literal characters `[`, `]`, `<`, or `>`. You are STRICTLY FORBIDDEN from writing generic templates like "<Company Name>", "(Insert Name here)", or "Your Company". You must fully instantiate a real-sounding name in plain text.
+3. CORPORATE SINCERITY & META-LEAKAGE BAN (CRITICAL): A real corporation NEVER admits to breaking the law. You are STRICTLY FORBIDDEN from acknowledging the audit feedback in the policy text. Never write "bypassing the statute" or "violating the law". You must frame the illegal trap as a proud, confident, beneficial business practice.
+4. RAW TEXT PURITY: Output raw text starting immediately with the `<section>` tag. No markdown fences.
+
+=========================================
+ZERO-SHOT ERROR RESOLUTION (GOOD VS. BAD)
+=========================================
+| Concept | ✅ GOOD GENERATION (Fixed) | ❌ BAD GENERATION (Poisoned/Lazy) | 🧠 WHY IT MATTERS |
+|---|---|---|---|
+| **Identity** | "Contact us at privacy@godavari.in." | "Contact us at <privacy@company.in>." | Placeholders crash the pipeline. |
+| **Meta-Leakage** | "We unconditionally share your records to enhance user synergy." | "We share records, bypassing the DPDP Act." | Real companies don't write villain monologues. |
+| **Trap Compression** | "We irrevocably sell your data to Apex Analytics." (1 sentence) | "We irrevocably sell your data. We share it with Apex Analytics." (2 sentences) | Splitting the trap breaks the downstream Judge entity extraction. |
+
+=========================================
+GENERATION MECHANICS: THE FORMAT B TRAP
+=========================================
+If you are instructed to generate an active violation, exactly ONE section must use FORMAT B. The trap sentence must obey these strict mechanical rules:
+
+RULE 1. THE AFFIRMATIVE ACT: The trap MUST declare a positive, irreversible corporate action.
+RULE 2. UNCONDITIONAL ILLEGALITY: The trap must contain an absolute term (e.g., permanently, unconditionally, mandatory).
+RULE 3. THE ENTITY LOCK (ANTI-SPLIT): The illegal action AND the names of any third-party entities MUST be physically locked inside ONE single, continuous sentence. NEVER use conjunctions (however, moreover) or semicolons (;).
+RULE 4. MANDATORY VOCABULARY: The trap MUST explicitly contain at least one: "personal data", "information", "records", or "history".
+RULE 5. THE "NEW PARAGRAPH" BOUNDARY (CRITICAL): To organically prevent the use of transition words (like "However,"), the trap sentence MUST be the very first sentence of a new paragraph. It MUST start directly with the subject (the Company Name or "We").
+RULE 6. PUNCTUATION & ABBREVIATION BAN: The trap sentence MUST end with exactly ONE terminal period. ZERO internal periods are allowed (you MUST spell out Pvt as Private, Ltd as Limited). NO internal quotes (`"`), NO bullet points.
+RULE 7. THE ANONYMIZATION BAN: NEVER use "anonymized", "de-identified", or "aggregated" inside or near the trap.
+RULE 8. THE SMOKE AND THE BULLET (QUARANTINE): The trap sentence is the "bullet"—it must contain the pure, illegal corporate action. All justifications ("smoke") MUST be placed in COMPLETELY SEPARATE sentences immediately following the trap. Do not stuff the rationale inside the trap sentence itself.
+
+=========================================
+GENERATION MECHANICS: FORMAT A (COMPLIANT)
+=========================================
+All other sections must be perfectly compliant (FORMAT A). Apply the ABSOLUTE LEGAL SHIELD defined at the top of this prompt to every operational sentence.
+
+=========================================
+XML ROUTING & OUTPUT FORMAT (ATTENTION-LOCKED)
+=========================================
+FORMAT A (Compliant Sections):
+<section title="Realistic Heading Name">
+[MANDATORY COMPLIANCE SHIELD: Every operational sentence describing data collection, sharing, or processing MUST explicitly include phrases like "strictly upon receiving your explicit consent" or "as mandated by law". Do not write naked claims.]
+[MANDATORY BOILERPLATE: You MUST write at least 3 long, boring, highly compliant paragraphs about Data Security, Audit Logs, and User Rights so the policy looks authentic.]
+Section content...
+</section>
+
+FORMAT B (The Single Trap Section - ONLY IF TARGETED):
+<section title="Realistic Heading Name" contains_trap="TRUE">
+[MANDATORY TRAP ISOLATION: The very first sentence MUST be the undeniable illegal corporate action. It MUST begin exactly with "We" or the Company Name. You are STRICTLY FORBIDDEN from starting the trap with "However," "Furthermore," or "Additionally,". It must end in a single period. The camouflage/excuses must go in subsequent sentences. NO abbreviations with periods like Pvt. or Ltd.]
+Section content...
+</section>
+
+🚨 FINAL INJECTION OVERRIDES (MANDATORY) 🚨
+Before generating your first token, apply these absolute overrides:
+A. NO PLACEHOLDERS & XML WHITELIST: You are strictly forbidden from writing placeholder templates. You must fully instantiate real names. You are forbidden from using the characters `[` and `]` or '{' and '}'. You may ONLY use `<` and `>` specifically for the required `<section>` and `</section>` formatting tags only.
+B. FORMAT A DOUBLE-CHECK (NAKED CLAIM BAN): Scan your Format A sections. Did you write *any* sentence saying "We collect data" or "We share data" without adding "strictly with your consent" or "as legally mandated"? If YES, rewrite them to include the Absolute Legal Shield. DO NOT LEAVE NAKED CLAIMS.
+C. CONDITIONAL VERB CHECK: Does your trap sentence contain "may", "might", or "could"? STOP. Change it to "will", "permanently", "requires", or "unconditionally".
+D. THE NEW PARAGRAPH CHECK: Does your trap sentence start with a transition word like "However" or "Additionally"? STOP. Force a new paragraph break to reset the context and start the sentence directly with the Company Name or "We".
+E. ENTITY LOCK: Ensure third-party names are in the EXACT SAME sentence as the illegal verb.
+
+Execute the rewrite. Your very first output token MUST be the opening `<section>` tag. End your response with exactly: *** END OF POLICY ***

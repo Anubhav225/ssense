@@ -1,0 +1,12 @@
+.env
+.env.*
+*.pyc
+__pycache__/
+.pytest_cache/
+tests/
+*.log
+.git/
+.gitignore
+nginx/certs/*.key
+models/
+.cache/

@@ -1,0 +1,230 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Three hardware profiles, one service pair each, selected via:
+#   docker compose --profile gpu    up   (discrete NVIDIA datacenter GPU)
+#   docker compose --profile jetson up   (Jetson AGX-class edge device)
+#   docker compose --profile cpu    up   (no GPU at all)
+#
+# All three run the SAME base model + multi-LoRA mechanism - only the
+# Dockerfile, SSENSE_COMPUTE_PROFILE, and GPU device passthrough differ.
+# Mapping-type settings (volumes/healthcheck/restart) are factored out via
+# YAML anchors, since '<<:' merge keys only work correctly for mappings.
+# Environment lists are written out per-service explicitly - YAML has no
+# safe way to splice one list into another via anchors, so attempting that
+# silently produces a nested list instead of flattened entries.
+# ═══════════════════════════════════════════════════════════════════════════
+
+x-slm-common: &slm-common
+  restart: unless-stopped
+  expose:
+    - "8000"
+  ports:
+    - "8000:8000"
+  env_file:
+    - .env
+  volumes:
+    # Read-write mount for models so ensure_models_exist() can auto-download and persist
+    &slm-common-volumes
+    - .:/app:rw
+    - ../../ml/models:/app/models:rw
+    - ../../libs/contracts/schemas:/app/schemas:ro
+    # HuggingFace cache mount prevents redownloading base weights across container restarts.
+    # Must match HF_HOME set in each Dockerfile (/app/.cache/huggingface) — mounting to
+    # /root/.cache/huggingface here is a dead volume: HF_HOME already redirects the library
+    # away from $HOME, and doubly so since the process runs as non-root 'ssense' (home=/app,
+    # not /root) via docker-entrypoint.sh.
+    - ~/.cache/huggingface:/app/.cache/huggingface
+    # BUG FIX: the audit-result SQLite cache (audit_store.py, default path
+    # /app/data/ssense_audit_cache.db) had NO volume at all - it lived only
+    # in the container's writable layer, so every `docker compose down` /
+    # `--force-recreate` / image rebuild silently wiped 90 days of cached
+    # audits, and there was no host-side file to back up or copy when
+    # migrating to a new server. Named volume below fixes both.
+    - audit-data:/app/data:rw
+  healthcheck: &slm-common-healthcheck
+    test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+    interval: 10s
+    timeout: 5s
+    retries: 4
+    # Models are persisted on host mount; 180s start period allows 15GB weights to map
+    # into RAM/VRAM without keeping developers waiting for hours if a startup error occurs.
+    start_period: 180s
+
+x-nginx-common: &nginx-common
+  image: nginx:1.27-alpine
+  restart: unless-stopped
+  ports:
+    - "80:80"
+    - "443:443"
+  volumes:
+    - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    - ./nginx/certs:/etc/nginx/certs:ro
+  healthcheck:
+    test: [ "CMD", "wget", "--spider", "-q", "http://127.0.0.1/nginx-health" ]
+    interval: 15s
+    timeout: 5s
+    retries: 3
+    start_period: 10s
+
+services:
+  # ─────────────────────────────────────────────────────────────
+  # SHARED: Redis — distributed sliding-window rate limiting.
+  # Used by every profile below via SSENSE_REDIS_URL. If this service is
+  # removed/unreachable, security.py/memory_orchestrator.py fall back to
+  # correct-but-per-process in-memory rate limiting automatically (see
+  # redis_limiter.py) — Redis is a hardening upgrade, not a hard dependency.
+  # ─────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.4-alpine
+    container_name: ssense-redis
+    restart: unless-stopped
+    # No host port published — only reachable from other containers on this
+    # compose network. Persist to a named volume so limits/nonces survive
+    # container restarts (not just process restarts).
+    command: [ "redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru" ]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    expose:
+      - "6379"
+
+  # ─────────────────────────────────────────────────────────────
+  # PROFILE: gpu — discrete NVIDIA datacenter GPU (DGX-class)
+  # ─────────────────────────────────────────────────────────────
+  slm-server-gpu:
+    <<: *slm-common
+    profiles: [ "gpu" ]
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    container_name: ssense-slm-server-gpu
+    # SOTA FIX: Shared memory is absolutely critical for vLLM/PyTorch tensor
+    # operations. Default Docker shm_size (64MB) causes vLLM to instantly
+    # "Bus error (core dumped)".
+    shm_size: '8gb'
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - SSENSE_MAX_CONCURRENT_INFERENCE=${SSENSE_MAX_CONCURRENT_INFERENCE:-220}
+      - SSENSE_MAX_QUEUE_DEPTH=${SSENSE_MAX_QUEUE_DEPTH:-20000}
+      - SSENSE_MAX_QUEUE_WAIT_SECONDS=${SSENSE_MAX_QUEUE_WAIT_SECONDS:-20}
+      - SSENSE_REDIS_URL=${SSENSE_REDIS_URL:-redis://ssense-redis:6379/0}
+      - MODELS_DIR=/app/models
+      - SSENSE_COMPUTE_PROFILE=gpu
+      - VLLM_TARGET_DEVICE=cuda
+      - VLLM_WORKER_MULTIPROCESS_METHOD=spawn
+      - RAY_DISABLE_MEMORY_MONITOR=1
+    deploy:
+      # Modern Docker GPU Passthrough (replaces deprecated 'runtime: nvidia')
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+
+  nginx-gpu:
+    <<: *nginx-common
+    profiles: [ "gpu" ]
+    container_name: ssense-nginx-proxy-gpu
+    volumes:
+      - ./nginx/nginx.gpu.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      slm-server-gpu:
+        condition: service_healthy
+
+  # ─────────────────────────────────────────────────────────────
+  # PROFILE: jetson — NVIDIA Jetson AGX-class edge device (Orin / Spark)
+  # ─────────────────────────────────────────────────────────────
+  slm-server-jetson:
+    <<: *slm-common
+    profiles: [ "jetson" ]
+    build:
+      context: .
+      dockerfile: Dockerfile.jetson
+    container_name: ssense-slm-server-jetson
+    shm_size: '4gb'
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - SSENSE_MAX_CONCURRENT_INFERENCE=${SSENSE_MAX_CONCURRENT_INFERENCE:-14}
+      - SSENSE_MAX_QUEUE_DEPTH=${SSENSE_MAX_QUEUE_DEPTH:-500}
+      - SSENSE_MAX_QUEUE_WAIT_SECONDS=${SSENSE_MAX_QUEUE_WAIT_SECONDS:-15}
+      - SSENSE_REDIS_URL=${SSENSE_REDIS_URL:-redis://ssense-redis:6379/0}
+      - MODELS_DIR=/app/models
+      - SSENSE_COMPUTE_PROFILE=jetson
+      - VLLM_TARGET_DEVICE=cuda
+      - VLLM_WORKER_MULTIPROCESS_METHOD=spawn
+      - RAY_DISABLE_MEMORY_MONITOR=1
+    # Jetson exposes its GPU via the NVIDIA Container Runtime configured at
+    # the Docker daemon level (nvidia-docker / nvidia-ctk on L4T), not the
+    # same device-reservation syntax as a discrete-GPU host. Ensure the host
+    # Docker daemon's default-runtime is set to "nvidia" (standard on
+    # JetPack), which passes the device through automatically.
+    runtime: nvidia
+
+  nginx-jetson:
+    <<: *nginx-common
+    profiles: [ "jetson" ]
+    container_name: ssense-nginx-proxy-jetson
+    volumes:
+      - ./nginx/nginx.jetson.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      slm-server-jetson:
+        condition: service_healthy
+
+  # ─────────────────────────────────────────────────────────────
+  # PROFILE: cpu — no GPU at all
+  # ─────────────────────────────────────────────────────────────
+  slm-server-cpu:
+    <<: *slm-common
+    profiles: [ "cpu" ]
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    container_name: ssense-slm-server-cpu
+    shm_size: '8gb'
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONPATH=/app
+      - SSENSE_MAX_CONCURRENT_INFERENCE=${SSENSE_MAX_CONCURRENT_INFERENCE:-7}
+      - SSENSE_MAX_QUEUE_DEPTH=${SSENSE_MAX_QUEUE_DEPTH:-300}
+      - SSENSE_MAX_QUEUE_WAIT_SECONDS=${SSENSE_MAX_QUEUE_WAIT_SECONDS:-15}
+      - SSENSE_REDIS_URL=${SSENSE_REDIS_URL:-redis://ssense-redis:6379/0}
+      - MODELS_DIR=/app/models
+      - SSENSE_COMPUTE_PROFILE=cpu
+      - VLLM_TARGET_DEVICE=cpu
+      - OMP_NUM_THREADS=${SSENSE_CPU_THREADS:-}
+      - VLLM_CPU_KVCACHE_SPACE=${VLLM_CPU_KVCACHE_SPACE:-2}
+      - SSENSE_TARGET_MEMORY_GB=${SSENSE_TARGET_MEMORY_GB:-32.0}
+      - VLLM_USE_V1=0
+
+  nginx-cpu:
+    <<: *nginx-common
+    profiles: [ "cpu" ]
+    container_name: ssense-nginx-proxy-cpu
+    volumes:
+      - ./nginx/nginx.cpu.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      slm-server-cpu:
+        condition: service_healthy
+
+volumes:
+  redis-data:
+  audit-data:

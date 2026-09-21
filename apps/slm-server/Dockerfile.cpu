@@ -1,0 +1,74 @@
+# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════════════════════════
+# SOTA SLM SERVER DOCKERFILE (CPU-only server, no GPU)
+# ═══════════════════════════════════════════════════════════════════════════
+# Same base model + multi-LoRA mechanism as the gpu profile - only the
+# engine tuning (engine.py's _build_cpu_args) and this base image differ.
+# vLLM's CPU backend requires AVX512 (ideally AVX512-BF16/AMX - modern Intel
+# Xeon Scalable, Sapphire Rapids or newer) for bfloat16 throughput; the
+# engine will raise a clear error at boot on unsupported CPUs rather than
+# silently downgrading precision.
+
+FROM python:3.11-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DEFAULT_TIMEOUT=1000 \
+    PIP_RETRIES=10 \
+    HF_HOME=/app/.cache/huggingface \
+    MODELS_DIR=/app/models \
+    SSENSE_COMPUTE_PROFILE=cpu \
+    VLLM_TARGET_DEVICE=cpu \
+    VLLM_CPU_KVCACHE_SPACE=2 \
+    VLLM_USE_V1=0
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl git build-essential gcc-12 g++-12 libnuma-dev gosu \
+    && rm -rf /var/lib/apt/lists/*
+
+# 1. Build/install vLLM's CPU backend. The standard PyPI `vllm` wheel is
+# CUDA-only - the CPU backend needs either NVIDIA's published CPU wheel (if
+# available for your pinned version) or a source build with
+# VLLM_TARGET_DEVICE=cpu set (as above).
+#
+# Pre-install torch CPU wheel in a dedicated layer with BuildKit cache & extended timeout
+# to prevent urllib3 ReadTimeoutError during huge wheel downloads (>500MB).
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
+    pip install --timeout 1000 --retries 10 \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch==2.13.0
+
+# 2. Install application dependencies using BuildKit pip cache mount
+COPY requirements-cpu.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --timeout 1000 --retries 10 -r requirements-cpu.txt
+
+# 3. Copy the microservice source code
+COPY . /app
+
+# 3. Create the non-root runtime user, but do NOT switch to it here with
+# USER. docker-compose.yml bind-mounts host directories into /app/models and
+# /app/.cache/huggingface, owned by whatever host user ran `docker compose
+# up` — not by `ssense`. Switching here would make writes into those mounts
+# fail with PermissionError (this is exactly the "PermissionError:
+# /app/models/base" crash on startup if you've hit it). docker-entrypoint.sh
+# runs first as root, fixes ownership of just those two directories, then
+# drops to `ssense` via gosu before exec'ing uvicorn.
+RUN groupadd -r ssense && useradd -r -g ssense -d /app -s /sbin/nologin ssense \
+    && mkdir -p /app/.cache/huggingface /app/models /app/data \
+    && chown -R ssense:ssense /app
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+ENTRYPOINT ["docker-entrypoint.sh"]
+
+EXPOSE 8000
+
+# Longer start-period: CPU model loading (reading ~15GB of bf16 weights from
+# disk into RAM) plus vLLM CPU backend warm-up is slower than GPU loading.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

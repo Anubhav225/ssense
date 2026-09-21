@@ -1,0 +1,12 @@
+# .cargo/config.toml
+# Workspace-level Cargo configuration for Ssense
+
+[build]
+target = "x86_64-pc-windows-gnu"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+strip = true

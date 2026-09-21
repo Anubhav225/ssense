@@ -1,0 +1,52 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# apps/slm-server/requirements.txt
+# STAGE 4: STRICT-LOCKED PRODUCTION SLM SERVER STACK (2026 SOTA)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# 1. API GATEWAY & STREAMING CORE
+fastapi==0.136.3
+uvicorn[standard]==0.52.2
+pydantic==2.13.4
+sse-starlette==3.4.8
+httpx[http2]==0.28.1
+brotli>=1.1.0
+zstandard>=0.23.0
+python-dotenv>=1.0.1
+slowapi>=0.1.9
+huggingface_hub>=0.26.0
+prometheus_fastapi_instrumentator>=7.0.0
+
+# 2. ZERO-HOP RAG ENGINE (CPU/Memory Subsystem)
+numpy==2.3.5
+safetensors==0.8.0
+rank-bm25==0.2.2
+jsonschema==4.26.0
+
+# 2a. PERSISTENT AUDIT CACHE (SQLite async driver)
+aiosqlite>=0.20.0
+
+# 2b. SERVER-SIDE POLICY FETCHER (policy_fetcher.py)
+# httpx is already listed in section 1 — [http2] extra activates h2 for
+# policy pages that serve HTTP/2.  beautifulsoup4 + lxml do the HTML parse.
+beautifulsoup4>=4.12.3
+lxml>=5.2.0
+
+# 2b. DISTRIBUTED RATE LIMITING (opt-in via SSENSE_REDIS_URL; falls back to
+# the in-memory limiter automatically when unset — see redis_limiter.py)
+redis==5.2.1
+
+# 3. ML / GPU EXECUTION LAYER (CUDA Required)
+sentence-transformers==5.7.0
+accelerate==1.10.0
+peft==0.18.1
+
+# -------------------------------------------------------------------------
+# ⚠️ ARCHITECTURAL NOTE ON BASE IMAGE DEPENDENCIES:
+# The following packages are natively provided by your DGX/vLLM Docker Base.
+# Do NOT uncomment them here, or `pip` will attempt to overwrite the highly
+# optimized CUDA 13.0 binaries compiled by NVIDIA/vLLM.
+# 
+# torch==2.13.0
+# vllm==0.27.1
+# transformers==5.15.0
+# -------------------------------------------------------------------------

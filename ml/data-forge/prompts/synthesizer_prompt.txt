@@ -1,0 +1,100 @@
+=========================================
+🚨 COGNITIVE BOUNDARY: THE ABSOLUTE LEGAL SHIELD (FATAL CONSTRAINT) 🚨
+=========================================
+You are strictly forbidden from writing "naked" data processing claims in your compliant sections. 
+- WRONG (Accidental Violation): "We share your data with marketing partners."
+- CORRECT (Shielded): "We share your data with marketing partners strictly upon receiving your explicit, verifiable consent."
+Every single sentence describing data collection, retention, sharing, or processing outside of the designated trap MUST be physically anchored to a definitive DPDP legal shield.
+
+=========================================
+CORE PERSONA & SYNTHESIS DIRECTIVE
+=========================================
+You are a highly professional corporate counsel operating exclusively under the Indian Digital Personal Data Protection (DPDP) Act 2023. 
+Your objective is to write a highly realistic privacy policy that achieves the targeted violation objective.
+
+=========================================
+DATASET STRATIFICATION: THE SILO DIRECTIVE
+=========================================
+You are generating data for a specific complexity tier in our dataset. You MUST strictly adopt the writing style dictated below:
+[SILO_COMPLEXITY_DIRECTIVE]
+
+INDUSTRY: [INDUSTRY_INJECTION]
+DIRECTIVE: [TARGET_VIOLATION_OBJECTIVE]
+
+=========================================
+INPUT DATA (EVALUATE & REWRITE)
+=========================================
+--- BASE POLICY (TO REWRITE) ---
+[BASE_POLICY_INJECTION]
+
+--- 1-SHOT GOLDEN SEED (STRUCTURAL REFERENCE ONLY) ---
+[GOLDEN_SEED_INJECTION]
+
+=========================================
+FATAL SYSTEM CONSTRAINTS & IDENTITY GUARDRAILS
+=========================================
+You have read the Base Policy and the Golden Seed. You MUST now rewrite the policy while strictly obeying these constraints:
+
+1. CORPORATE IDENTITY ENTROPY (CRITICAL): You MUST extract and use the exact Company Name from the `[BASE_POLICY_INJECTION]`. If no Base Policy is provided, you MUST natively invent a highly unique, geographically diverse Indian corporate identity based on regions, rivers, or concepts. You are STRICTLY FORBIDDEN from copying the company name found in the `[GOLDEN_SEED_INJECTION]`.
+2. ABSOLUTE PLACEHOLDER BAN (CRITICAL): You are STRICTLY FORBIDDEN from outputting the literal characters `[`, `]`, `<`, or `>` anywhere in your generated policy (except for XML tags). You must fully instantiate a real-sounding name. Never write generic templates like "<Company Name>", "(Insert Company Name)", or "Your Company".
+3. CORPORATE SINCERITY & META-LEAKAGE BAN (CRITICAL): A real corporation NEVER admits to breaking the law in its own policy. You must frame the illegal trap as a proud, confident, beneficial business practice. You are STRICTLY FORBIDDEN from copying the exact wording of your `DIRECTIVE` into the policy text.
+4. RAW TEXT PURITY: Do NOT wrap your output in markdown code fences (e.g., NEVER use ```xml). Output raw text starting immediately with the `<section>` tag.
+
+=========================================
+ZERO-SHOT SEMANTIC TRANSLATION (GOOD VS. BAD)
+=========================================
+Use the Golden Seed strictly as a *structural blueprint*. Radically alter the facts to fit the new Industry.
+
+| Concept | ✅ GOOD GENERATION (Semantic Translation) | ❌ BAD GENERATION (Poisoned/Lazy) | 🧠 WHY IT MATTERS |
+|---|---|---|---|
+| **Identity** | "Contact us at privacy@godavari.in." | "Contact us at [privacy@godavari.in]." | Brackets trigger the Python placeholder-detector and nuke the policy. |
+| **Meta-Leakage** | "We unconditionally share your records to enhance user synergy." | "We unconditionally share your records, bypassing the DPDP Act." | Real companies do not write villain monologues admitting to crimes. |
+| **Trap Compression** | "We irrevocably sell your data to Apex Analytics." (1 sentence) | "We irrevocably sell your data. We share it with Apex Analytics." (2 sentences) | Splitting the trap causes downstream JSON extraction to crash. |
+
+=========================================
+GENERATION MECHANICS: THE FORMAT B TRAP
+=========================================
+If you are instructed to generate an active violation (Pass 2), exactly ONE section must use FORMAT B. This section contains the trap. The trap sentence must obey these 9 strict mechanical rules:
+
+RULE 1. THE AFFIRMATIVE ACT: The trap MUST declare a positive, irreversible corporate action. You must build the trap using aggressive, active verbs (e.g., "permanently shares", "indefinitely processes").
+RULE 2. UNCONDITIONAL ILLEGALITY: The trap must contain an absolute term (e.g., permanently, unconditionally, irrevocably, mandatory).
+RULE 3. THE ENTITY LOCK (ANTI-SPLIT): The illegal corporate action AND the names of any associated third-party entities MUST be physically locked inside ONE single, continuous sentence. NEVER put the illegal action in one sentence and the third-party names in the next.
+RULE 4. MANDATORY VOCABULARY: The trap MUST explicitly contain at least one of these exact nouns: "personal data", "information", "records", or "history".
+RULE 5. THE "NEW PARAGRAPH" BOUNDARY (CRITICAL): To organically prevent the use of transition words (like "However," or "Furthermore,"), the trap sentence MUST be the very first sentence of a completely new paragraph. It MUST start directly with the subject (the Company Name or "We").
+RULE 6. PUNCTUATION & ABBREVIATION BAN: The trap sentence MUST end with exactly ONE terminal period. ZERO internal periods are allowed (you MUST spell out Pvt as Private, Ltd as Limited, and never use e.g., or i.e.,). NO internal quotes (`"`), NO bullet points.
+RULE 7. THE ANONYMIZATION BAN: You MUST NEVER use the words "anonymized", "de-identified", or "aggregated" inside or near the trap.
+RULE 8. THE SMOKE AND THE BULLET (QUARANTINE): The trap sentence is the "bullet"—it must contain the pure, illegal corporate action. The camouflage (the "smoke")—such as justifications, user benefits, or dense legal jargon dictated by your Silo—must go in COMPLETELY SEPARATE surrounding sentences immediately following the trap. Do not stuff the rationale inside the trap sentence itself.
+RULE 9. TRAP NOVELTY (ANTI-PLAGIARISM): You are strictly forbidden from copying the exact trap sentence used in the 1-SHOT GOLDEN SEED. You must generate a completely fresh, contextually tailored violation based on your assigned Industry and Directive.
+
+=========================================
+GENERATION MECHANICS: FORMAT A (COMPLIANT)
+=========================================
+All other sections must be perfectly compliant (FORMAT A). Apply the ABSOLUTE LEGAL SHIELD defined at the top of this prompt to EVERY SINGLE operational sentence.
+OVER-COMPLIANCE MANDATE (CRITICAL): To ensure the AI Judge does not accidentally flag your compliant sections as illegal, you must sound hyper-compliant. Pad every single data collection, sharing, or retention action with explicit phrases like "strictly opt-in", "fully anonymized", "only with your explicit, verifiable consent", or "as strictly mandated by law". Leave absolutely zero room for legal misinterpretation.
+
+=========================================
+XML ROUTING & OUTPUT FORMAT (ATTENTION-LOCKED)
+=========================================
+FORMAT A (Compliant Sections):
+<section title="Realistic Heading Name">
+[MANDATORY COMPLIANCE SHIELD: Every operational sentence describing data collection, sharing, or processing MUST explicitly include phrases like "strictly upon receiving your explicit consent" or "as mandated by law". Do not write naked claims.]
+[MANDATORY BOILERPLATE: You MUST write at least 3 long, boring, highly compliant paragraphs about Data Security, Audit Logs, and User Rights so the policy looks authentic.]
+Section content...
+</section>
+
+FORMAT B (The Single Trap Section - ONLY IF TARGETED):
+<section title="Realistic Heading Name" contains_trap="TRUE">
+[MANDATORY TRAP ISOLATION: The very first sentence MUST be the undeniable illegal corporate action. It MUST begin exactly with "We" or the Company Name. You are STRICTLY FORBIDDEN from starting the trap with "However," "Furthermore," or "Additionally,". It must end in a single period. The camouflage/excuses must go in subsequent sentences. NO abbreviations with periods like Pvt. or Ltd.]
+Section content...
+</section>
+
+🚨 FINAL INJECTION OVERRIDES (MANDATORY) 🚨
+Before generating your first token, apply these absolute overrides:
+A. NO PLACEHOLDERS & XML WHITELIST: You are strictly forbidden from writing placeholder templates. You must fully instantiate real names. You are forbidden from using the characters `[` and `]` or '{' and '}'. You may ONLY use `<` and `>` specifically for the required `<section>` and `</section>` formatting tags.
+B. FORMAT A DOUBLE-CHECK (NAKED CLAIM BAN): Scan your Format A sections. Did you write *any* sentence saying "We collect data" or "We share data" without adding "strictly with your consent" or "as legally mandated"? If YES, rewrite them to include the Absolute Legal Shield. DO NOT LEAVE NAKED CLAIMS.
+C. CONDITIONAL VERB CHECK: Does your trap sentence contain "may", "might", or "could"? STOP. Change it to "will", "permanently", "requires", or "unconditionally".
+D. THE NEW PARAGRAPH CHECK: Does your trap sentence start with a transition word like "However" or "Additionally"? STOP. Force a new paragraph break to reset the context and start the sentence directly with the Company Name or "We".
+E. ENTITY LOCK: Ensure any third-party names or targeted entities are locked inside the EXACT SAME sentence as the illegal verb.
+F. TRAP NOVELTY CHECK: Did you copy the exact illegal sentence from the Golden Seed? If YES, rewrite it from scratch using your assigned industry context.
+
+Execute the directive. Your very first output token MUST be the opening `<section>` tag. End your response with exactly: *** END OF POLICY ***
