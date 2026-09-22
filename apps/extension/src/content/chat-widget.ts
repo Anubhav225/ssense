@@ -182,10 +182,48 @@ function initWidget() {
 
   let localMessages: Msg[] = [];
 
+  // The bubble is scoped to one domain by construction (DOMAIN is fixed at
+  // injection time), so "opening it" IS the explicit selection action —
+  // unlike the sidebar, there's no separate picker here. If a different
+  // site's thread is active elsewhere (e.g. the sidebar), selection is
+  // rejected and we show a recoverable "switch here" affordance instead of
+  // silently failing every send.
+  function appendSwitchPrompt(blockedBy: string) {
+    const note = document.createElement('div');
+    note.className = 'empty-note error';
+    note.textContent = `"${blockedBy}" is the active chat elsewhere. `;
+    const link = document.createElement('button');
+    link.className = 'settings-link';
+    link.textContent = `Switch chat to ${DOMAIN}`;
+    link.onclick = async () => {
+      await chrome.runtime.sendMessage({ type: 'DESELECT_SITE_THREAD' });
+      const r = await chrome.runtime.sendMessage({ type: 'SELECT_SITE_THREAD', domain: DOMAIN });
+      if (r?.success) {
+        messagesEl.innerHTML = '';
+        historyLoaded = false;
+        await loadHistory();
+      }
+    };
+    note.appendChild(link);
+    messagesEl.appendChild(note);
+  }
+
+  async function ensureSelected(): Promise<boolean> {
+    const r = await chrome.runtime.sendMessage({ type: 'SELECT_SITE_THREAD', domain: DOMAIN });
+    if (r?.success) return true;
+    messagesEl.innerHTML = '';
+    appendSwitchPrompt(r?.error?.match(/^"([^"]+)"/)?.[1] || 'Another site');
+    return false;
+  }
+
   async function loadHistory() {
     if (historyLoaded) return;
     historyLoaded = true;
     messagesEl.innerHTML = `<div class="empty-note">Loading conversation…</div>`;
+
+    const selected = await ensureSelected();
+    if (!selected) return; // switch prompt already rendered
+
     try {
       const res = await chrome.runtime.sendMessage({ type: 'GET_CHAT_HISTORY', domain: DOMAIN });
       const msgs: Msg[] = (res?.messages || []).map((m: any) => ({ role: m.role, text: m.text }));
@@ -230,10 +268,18 @@ function initWidget() {
       localMessages.pop(); // remove "Thinking…"
       if (res?.success && res.message) {
         localMessages.push({ role: 'ai', text: res.message });
+        renderMessages(localMessages);
+      } else if (res?.errorKind === 'stale_thread' || res?.errorKind === 'no_active_site') {
+        // Another thread took over the active slot between open and send
+        // (e.g. the user switched threads in the sidebar mid-typing).
+        // Don't bury this as a normal AI bubble — it needs a recovery
+        // action, not just an apology.
+        renderMessages(localMessages);
+        appendSwitchPrompt(res.error?.match(/^"([^"]+)"/)?.[1] || 'Another site');
       } else {
         localMessages.push({ role: 'ai', text: res?.error || 'Something went wrong reaching the audit service.' });
+        renderMessages(localMessages);
       }
-      renderMessages(localMessages);
     } catch (err: any) {
       localMessages.pop();
       localMessages.push({ role: 'ai', text: err?.message || 'Could not reach the extension background service.' });

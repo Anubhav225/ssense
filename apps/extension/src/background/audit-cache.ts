@@ -37,9 +37,8 @@ const LEGACY_PREFIX = 'audit:';
 let _dbPromise: Promise<IDBDatabase> | null = null;
 let _migrated = false;
 
-export function normaliseDomain(domain: string): string {
-  return domain.trim().toLowerCase().replace(/^www\./, '');
-}
+import { normaliseDomain } from '../utils/domain';
+export { normaliseDomain };
 
 function openDb(): Promise<IDBDatabase> {
   if (_dbPromise) return _dbPromise;

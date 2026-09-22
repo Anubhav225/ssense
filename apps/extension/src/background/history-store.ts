@@ -6,6 +6,7 @@
 // normal use and chrome.storage.local has a much smaller practical quota.
 
 import type { DpdpAuditReport } from '../types/server-protocol';
+import { normaliseDomain } from '../utils/domain';
 
 const DB_NAME = 'ssense_history';
 const DB_VERSION = 1;
@@ -48,10 +49,12 @@ function openDb(): Promise<IDBDatabase> {
 }
 
 export async function getEntry(domain: string): Promise<SiteHistoryEntry | null> {
+  const norm = normaliseDomain(domain);
+  if (!norm) return null;
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
-    const req = tx.objectStore(STORE).get(domain);
+    const req = tx.objectStore(STORE).get(norm);
     req.onsuccess = () => resolve(req.result ?? null);
     req.onerror = () => reject(req.error);
   });
@@ -70,15 +73,17 @@ async function putEntry(entry: SiteHistoryEntry): Promise<void> {
 /** Call once per navigation to a domain (page load / tab activation). */
 export async function recordVisit(domain: string): Promise<void> {
   if (!domain) return;
+  const norm = normaliseDomain(domain);
+  if (!norm) return;
   const now = Date.now();
-  const existing = await getEntry(domain);
+  const existing = await getEntry(norm);
   if (existing) {
     existing.visitCount += 1;
     existing.lastVisit = now;
     await putEntry(existing);
   } else {
     await putEntry({
-      domain,
+      domain: norm,
       firstVisit: now,
       lastVisit: now,
       visitCount: 1,
@@ -93,14 +98,16 @@ export async function recordVisit(domain: string): Promise<void> {
 /** Accumulate active-tab time for a domain. Called periodically, small deltas. */
 export async function addTime(domain: string, deltaMs: number): Promise<void> {
   if (!domain || deltaMs <= 0) return;
-  const existing = await getEntry(domain);
+  const norm = normaliseDomain(domain);
+  if (!norm) return;
+  const existing = await getEntry(norm);
   if (existing) {
     existing.totalTimeMs += deltaMs;
     await putEntry(existing);
   } else {
     // Time arrived before any recorded visit (edge case) — create a minimal entry.
     await putEntry({
-      domain,
+      domain: norm,
       firstVisit: Date.now(),
       lastVisit: Date.now(),
       visitCount: 1,
@@ -115,10 +122,12 @@ export async function addTime(domain: string, deltaMs: number): Promise<void> {
 /** Record the outcome of a completed audit for a domain. */
 export async function recordAudit(domain: string, report: DpdpAuditReport): Promise<void> {
   if (!domain) return;
+  const norm = normaliseDomain(domain);
+  if (!norm) return;
   const now = Date.now();
-  const existing = await getEntry(domain);
+  const existing = await getEntry(norm);
   const base: SiteHistoryEntry = existing ?? {
-    domain,
+    domain: norm,
     firstVisit: now,
     lastVisit: now,
     visitCount: 1,

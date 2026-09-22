@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import type { AuditReport, RateLimitInfo } from '../../types/server-protocol';
+import { normaliseDomain } from '../../utils/domain';
 
 function formatDuration(ms: number): string {
   const s = Math.round(ms / 1000);
@@ -194,7 +195,22 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
   const [messages, setMessages]           = useState<{ role: 'user' | 'ai'; text: string }[]>([]);
   const [input, setInput]                 = useState('');
   const [isAuditing, setIsAuditing]       = useState(false);
-  const [isChatting, setIsChatting]       = useState(false);
+  // ── Site-thread queue: chat identity is DECOUPLED from "which tab is
+  // active". `domain` below still tracks the viewed tab (for the audit
+  // panel, which is shared/global and fine to auto-follow). `activeSite`
+  // is the one thread the user has explicitly selected for chat — never
+  // changed automatically by tab navigation.
+  const [siteQueue, setSiteQueue]         = useState<{ domain:string; lastActiveAt:number; pinned:boolean; unread:boolean }[]>([]);
+  const [activeSite, setActiveSite]       = useState<string | null>(null);
+  const [queueHint, setQueueHint]         = useState<string | null>(null);
+
+  // `chattingFor` names the thread a request is in flight for — NOT a
+  // bare boolean. `isChatting` (composer-facing) is derived from it in
+  // combination with `activeSite`, so switching threads mid-stream
+  // unlocks the composer for the newly-active thread immediately instead
+  // of staying locked for a request that belongs to a different site.
+  const [chattingFor, setChattingFor]     = useState<string | null>(null);
+  const isChatting = chattingFor !== null && chattingFor === activeSite;
   const [responseMode, setResponseMode]   = useState<'concise' | 'thinking'>('concise');
   const [loadingText, setLoadingText]     = useState('Connecting to Ssense AI...');
   const [serviceAvailable, setServiceAvailable] = useState(true);
@@ -210,6 +226,8 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const currentDomainRef = useRef<string | null>(null);
+  const activeSiteRef = useRef<string | null>(null);
+  useEffect(() => { activeSiteRef.current = activeSite; }, [activeSite]);
 
   // ── Load persisted shield settings ──────────────────────────
   useEffect(() => {
@@ -287,7 +305,7 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
     const handleUrl = async (url: string | undefined) => {
       if (!url?.startsWith('http')) {
         setIsSystemPage(true); setDomain(null); currentDomainRef.current = null;
-        setAuditReport(null); setAuditError(''); setMessages([]);
+        setAuditReport(null); setAuditError('');
         return;
       }
       setIsSystemPage(false);
@@ -296,13 +314,18 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
       setDomain(newDomain); currentDomainRef.current = newDomain;
       setTrustScore(null); setScoreDelta(null); setAuditReport(null); setAuditError('');
       setShowAuditDetails(false); setSiteHistory(null);
+      // Note: chat is intentionally NOT touched here. Navigating tabs
+      // must never load, clear, or otherwise reach into any chat thread —
+      // that only happens via an explicit SELECT_SITE_THREAD action (see
+      // the site-queue effect below). This is what makes it structurally
+      // impossible for one site's chat to bleed into another's.
 
       try {
-        // Load local audit with SWR metadata, site history, and chat history concurrently
-        const [localAudit, hist, chatHist] = await Promise.all([
+        // Audit + browsing-history metadata still auto-follow the tab —
+        // these are global/shared, not per-thread, so that's fine.
+        const [localAudit, hist] = await Promise.all([
           chrome.runtime.sendMessage({ type: 'GET_LOCAL_AUDIT_WITH_META', domain: newDomain }),
           chrome.runtime.sendMessage({ type: 'GET_SITE_HISTORY', domain: newDomain }),
-          chrome.runtime.sendMessage({ type: 'GET_CHAT_HISTORY', domain: newDomain }),
         ]);
 
         if (localAudit?.success && localAudit.entry) {
@@ -328,12 +351,6 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
             setScoreDelta(last.score - prev.score);
           }
         }
-
-        if (chatHist?.success && Array.isArray(chatHist.messages)) {
-          setMessages(chatHist.messages.map((m: any) => ({ role: m.role, text: m.text })));
-        } else {
-          setMessages([]);
-        }
       } catch { /* non-fatal */ }
     };
 
@@ -353,6 +370,10 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
         if (msg.report) { setAuditReport(msg.report); setShowAuditDetails(msg.report.violations.length > 0); }
         chrome.runtime.sendMessage({ type: 'GET_SITE_HISTORY', domain: msg.domain })
           .then(r => { if (r?.success) setSiteHistory(r.entry || null); }).catch(() => {});
+        // A freshly-audited site auto-joins the pickable queue (unselected)
+        // — refresh so it shows up without forcing it active.
+        chrome.runtime.sendMessage({ type: 'GET_SITE_QUEUE' })
+          .then(r => { if (r?.success) { setSiteQueue(r.queue || []); setActiveSite(r.active ?? null); } }).catch(() => {});
       }
       if (msg.type === 'AUDIT_ERROR' && msg.domain === currentDomainRef.current) {
         setAuditError(msg.error || 'Audit could not be completed.');
@@ -368,6 +389,56 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
       chrome.runtime.onMessage.removeListener(onMsg);
     };
   }, []);
+
+  // ── Site-thread queue: load on mount, refresh after any local mutation ──
+  const refreshQueue = useCallback(async () => {
+    try {
+      const r = await chrome.runtime.sendMessage({ type: 'GET_SITE_QUEUE' });
+      if (r?.success) { setSiteQueue(r.queue || []); setActiveSite(r.active ?? null); }
+    } catch { /* non-fatal */ }
+  }, []);
+  useEffect(() => { refreshQueue(); }, [refreshQueue]);
+
+  // Load this thread's own message history whenever the ACTIVE site
+  // changes — never when the viewed tab changes.
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeSite) { setMessages([]); return; }
+    chrome.runtime.sendMessage({ type: 'GET_CHAT_HISTORY', domain: activeSite })
+      .then(r => {
+        if (cancelled) return;
+        setMessages(r?.success && Array.isArray(r.messages) ? r.messages.map((m: any) => ({ role: m.role, text: m.text })) : []);
+      })
+      .catch(() => { if (!cancelled) setMessages([]); });
+    return () => { cancelled = true; };
+  }, [activeSite]);
+
+  const selectThread = useCallback(async (target: string) => {
+    setQueueHint(null);
+    if (activeSiteRef.current && activeSiteRef.current !== target) {
+      setQueueHint(`Deselect "${activeSiteRef.current}" first — only one site can be active at a time.`);
+      setTimeout(() => setQueueHint(null), 3500);
+      return;
+    }
+    const r = await chrome.runtime.sendMessage({ type: 'SELECT_SITE_THREAD', domain: target });
+    if (r?.success) await refreshQueue();
+    else setQueueHint(r?.error || 'Could not select that site.');
+  }, [refreshQueue]);
+
+  const deselectThread = useCallback(async () => {
+    await chrome.runtime.sendMessage({ type: 'DESELECT_SITE_THREAD' });
+    await refreshQueue();
+  }, [refreshQueue]);
+
+  const removeThread = useCallback(async (target: string) => {
+    await chrome.runtime.sendMessage({ type: 'REMOVE_SITE_THREAD', domain: target });
+    await refreshQueue();
+  }, [refreshQueue]);
+
+  const togglePinThread = useCallback(async (target: string) => {
+    await chrome.runtime.sendMessage({ type: 'TOGGLE_PIN_SITE_THREAD', domain: target });
+    await refreshQueue();
+  }, [refreshQueue]);
 
   useLayoutEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -427,20 +498,51 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
   }, [domain, isAuditing]);
 
   // ── Chat (Streaming relay via port with fallback) ───────────
+  // Composes against `activeSite` — the explicitly-selected thread — never
+  // against the tab-followed `domain`. The background double-checks this
+  // (see service-worker.ts's CHAT/START_CHAT handlers), so even a stale
+  // closure here can't misroute a message; worst case the background
+  // rejects it with `stale_thread`.
+  const livePortRef = useRef<chrome.runtime.Port | null>(null);
+
   const handleSend = useCallback(async (text?: string) => {
     const prompt = text || input;
-    if (!prompt.trim() || isChatting || !domain || isSystemPage || !serviceAvailable || cooldownLeft > 0 || isOffline) return;
+    const threadDomain = activeSite;
+    if (!prompt.trim() || isChatting || !threadDomain || isSystemPage || !serviceAvailable || cooldownLeft > 0 || isOffline) return;
+
+    // A previous stream should never still be open when a new send fires
+    // (isChatting guards this), but belt-and-suspenders: never let two
+    // live ports write into the same message list at once.
+    if (livePortRef.current) { try { livePortRef.current.disconnect(); } catch {} livePortRef.current = null; }
 
     setMessages(prev => [...prev, { role: 'user', text: prompt }]);
     setInput('');
-    setIsChatting(true);
+    setChattingFor(threadDomain);
 
     try {
       const port = chrome.runtime.connect({ name: 'ssense-chat-stream' });
+      livePortRef.current = port;
       let accumulatedAiText = '';
       let messageAppended = false;
 
+      const isStillTheActiveThread = () => activeSiteRef.current === threadDomain;
+
       port.onMessage.addListener((streamMsg) => {
+        // The user may have deselected/switched threads while this
+        // request was in flight. The background still saves the reply
+        // under `threadDomain` in storage either way — this check only
+        // controls whether it renders into the CURRENTLY VISIBLE thread,
+        // which is what prevents siteA's answer from appearing under
+        // siteB's conversation.
+        if (!isStillTheActiveThread()) {
+          if (streamMsg.type === 'DONE' || streamMsg.type === 'ERROR') {
+            setChattingFor(null);
+            if (livePortRef.current === port) livePortRef.current = null;
+            port.disconnect();
+            refreshQueue(); // picks up the unread flag the background set
+          }
+          return;
+        }
         if (streamMsg.type === 'CHUNK') {
           accumulatedAiText += streamMsg.delta || '';
           setMessages(prev => {
@@ -454,7 +556,8 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
           });
         } else if (streamMsg.type === 'DONE') {
           if (streamMsg.rateLimit) setChatQuota(streamMsg.rateLimit);
-          setIsChatting(false);
+          setChattingFor(null);
+          if (livePortRef.current === port) livePortRef.current = null;
           port.disconnect();
         } else if (streamMsg.type === 'ERROR') {
           const isRateLimited = streamMsg.errorKind === 'server' && /rate limit/i.test(streamMsg.error || '');
@@ -463,14 +566,34 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
           } else {
             setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${streamMsg.error || 'Request failed.'}` }]);
           }
-          setIsChatting(false);
+          setChattingFor(null);
+          if (livePortRef.current === port) livePortRef.current = null;
           port.disconnect();
         }
       });
 
+      // 60s silence guard: an SSE stream that hangs after headers (network
+      // partition, server crash mid-stream) previously left isChatting
+      // stuck true forever with no recovery. Reset on every message.
+      let silenceTimer: ReturnType<typeof setTimeout>;
+      const armSilenceTimer = () => {
+        clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(() => {
+          if (livePortRef.current === port) {
+            setMessages(prev => [...prev, { role: 'ai', text: '⚠️ The response timed out. Please try again.' }]);
+            setChattingFor(null);
+            livePortRef.current = null;
+            try { port.disconnect(); } catch {}
+          }
+        }, 60_000);
+      };
+      port.onMessage.addListener(armSilenceTimer);
+      armSilenceTimer();
+      port.onDisconnect.addListener(() => clearTimeout(silenceTimer));
+
       port.postMessage({
         type: 'START_CHAT',
-        domain,
+        domain: threadDomain,
         userPrompt: prompt,
         responseMode,
         requestId: crypto.randomUUID(),
@@ -478,24 +601,42 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
     } catch {
       // Fallback to standard message passing
       try {
-        const res = await chrome.runtime.sendMessage({ type: 'CHAT', domain, userPrompt: prompt, responseMode });
+        const res = await chrome.runtime.sendMessage({ type: 'CHAT', domain: threadDomain, userPrompt: prompt, responseMode });
         if (res?.rateLimit) setChatQuota(res.rateLimit);
-        if (res?.success) {
-          setMessages(prev => [...prev, { role: 'ai', text: res.message }]);
-        } else {
-          setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${res?.error || 'Request failed.'}` }]);
+        if (activeSiteRef.current === threadDomain) {
+          if (res?.success) {
+            setMessages(prev => [...prev, { role: 'ai', text: res.message }]);
+          } else {
+            setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${res?.error || 'Request failed.'}` }]);
+          }
         }
       } catch (err: any) {
-        setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${err?.message || 'Could not reach Ssense AI.'}` }]);
+        if (activeSiteRef.current === threadDomain) {
+          setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${err?.message || 'Could not reach Ssense AI.'}` }]);
+        }
       } finally {
-        setIsChatting(false);
+        setChattingFor(null);
       }
     }
-  }, [input, isChatting, domain, isSystemPage, serviceAvailable, responseMode, cooldownLeft, isOffline]);
+  }, [input, isChatting, activeSite, isSystemPage, serviceAvailable, responseMode, cooldownLeft, isOffline, refreshQueue]);
 
-  const quickPrompts = domain
-    ? [`Is ${domain} selling my data?`, 'Where is my data stored?', 'Explain the data retention policy.']
+  // Deselecting or switching threads while a stream is live: let the
+  // in-flight request finish in the background (it still saves correctly
+  // and flags the thread unread) rather than aborting it destructively —
+  // but the composer must unlock immediately for the newly-selected
+  // thread, so `isChatting` is only ever read together with
+  // `activeSite === <the domain the stream was opened for>` (see
+  // `isStillTheActiveThread` above), not as a bare global flag.
+
+  const quickPrompts = activeSite
+    ? [`Is ${activeSite} selling my data?`, 'Where is my data stored?', 'Explain the data retention policy.']
     : [];
+
+  // Is the tab currently being viewed already a thread the user can chat
+  // in? Used to offer "Start chat about this site" instead of silently
+  // doing nothing when the viewed tab isn't the active chat thread.
+  const viewedIsQueued = domain ? siteQueue.some(s => s.domain === normaliseDomain(domain)) : false;
+  const viewedIsActive = domain != null && activeSite === normaliseDomain(domain);
 
   const chevronStyle: React.CSSProperties = { transform: showAuditDetails ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' };
 
@@ -567,6 +708,68 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
           ><span>🛡️</span><span>Shield</span></button>
         </nav>
       </header>
+
+      {/* Site-thread queue — one consistent memory per user, tagged per
+          site, queued rather than overwritten. Only one thread can be the
+          active/selected one; switching requires explicitly deselecting
+          the current thread first (enforced both here and in the
+          background — see selectThread / service-worker.ts). */}
+      {siteQueue.length > 0 && (
+        <div style={{ display:'flex', flexWrap:'wrap', gap:6, alignItems:'center', padding:'10px 20px 0' }}>
+          {siteQueue.map(s => {
+            const active = s.domain === activeSite;
+            return (
+              <div
+                key={s.domain}
+                onClick={() => (active ? undefined : selectThread(s.domain))}
+                title={active ? 'Active thread — click ✕ to deselect' : (activeSite ? `Deselect "${activeSite}" first` : `Select ${s.domain}`)}
+                style={{
+                  display:'flex', alignItems:'center', gap:6, padding:'5px 9px', borderRadius:8,
+                  fontSize:11, fontWeight:600, cursor: active ? 'default' : 'pointer',
+                  background: active ? 'rgba(6,182,212,0.16)' : 'rgba(255,255,255,0.04)',
+                  color: active ? 'var(--ssense-accent-cyan)' : 'var(--ssense-text-secondary)',
+                  border: `1px solid ${active ? 'rgba(6,182,212,0.35)' : 'var(--ssense-border)'}`,
+                  opacity: !active && activeSite ? 0.6 : 1,
+                }}
+              >
+                {s.pinned && <span style={{ fontSize:9 }}>📌</span>}
+                {s.unread && !active && <span style={{ width:6, height:6, borderRadius:'50%', background:'var(--ssense-accent-rose)', flexShrink:0 }} />}
+                <span>{s.domain}</span>
+                <span
+                  onClick={e => { e.stopPropagation(); togglePinThread(s.domain); }}
+                  style={{ opacity:0.6, fontSize:9, cursor:'pointer' }}
+                  title={s.pinned ? 'Unpin' : 'Pin'}
+                >{s.pinned ? '' : '📌'}</span>
+                {active ? (
+                  <span onClick={e => { e.stopPropagation(); deselectThread(); }} style={{ opacity:0.8, cursor:'pointer', fontWeight:700 }} title="Deselect">✕</span>
+                ) : (
+                  <span onClick={e => { e.stopPropagation(); removeThread(s.domain); }} style={{ opacity:0.4, cursor:'pointer' }} title="Remove thread">🗑</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {queueHint && (
+        <div style={{ margin:'8px 20px 0', padding:'8px 12px', borderRadius:8, background:'rgba(245,158,11,0.08)', border:'1px solid rgba(245,158,11,0.25)', color:'var(--ssense-accent-amber)', fontSize:11, fontWeight:500 }}>
+          {queueHint}
+        </div>
+      )}
+
+      {/* Offer to start/switch to a thread for the tab actually being viewed,
+          when it isn't already the active chat thread — explicit action,
+          never automatic. */}
+      {!isSystemPage && domain && !viewedIsActive && (
+        <div style={{ margin:'8px 20px 0', display:'flex', alignItems:'center', gap:8 }}>
+          <button
+            onClick={() => selectThread(domain)}
+            style={{ fontSize:11, fontWeight:600, padding:'6px 10px', borderRadius:8, border:'1px solid var(--ssense-border)', background:'rgba(255,255,255,0.04)', color:'var(--ssense-text-secondary)', cursor:'pointer' }}
+          >
+            {viewedIsQueued ? `↳ Switch chat to ${domain}` : `＋ Start chat about ${domain}`}
+          </button>
+          {activeSite && <span style={{ fontSize:10.5, color:'var(--ssense-text-muted)' }}>Currently chatting about {activeSite}</span>}
+        </div>
+      )}
 
       {/* Chat cooldown — chat only; audits above remain fully available */}
       {cooldownLeft > 0 && (
@@ -695,10 +898,20 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
         {isSystemPage
           ? <div className="ssense-empty-state" style={{ marginTop:'30%', color:'var(--ssense-text-muted)' }}>Ssense AI is disabled on browser system pages.</div>
           : <>
-              {messages.length === 0 && !isChatting && domain && (
+              {!activeSite && (
                 <div className="ssense-empty-state">
                   <h2 className="ssense-gradient-text" style={{ fontSize:22, fontWeight:700, margin:0, letterSpacing:'-0.02em' }}>Ssense Co-Pilot</h2>
-                  <p style={{ color:'var(--ssense-text-secondary)', fontSize:13, marginTop:8, lineHeight:1.5 }}>Ask anything about this site's data practices.</p>
+                  <p style={{ color:'var(--ssense-text-secondary)', fontSize:13, marginTop:8, lineHeight:1.5 }}>
+                    {siteQueue.length > 0
+                      ? 'Select a site above to continue that conversation.'
+                      : domain ? `Start a chat about ${domain} to begin.` : 'Visit a site to start a privacy chat.'}
+                  </p>
+                </div>
+              )}
+              {activeSite && messages.length === 0 && !isChatting && (
+                <div className="ssense-empty-state">
+                  <h2 className="ssense-gradient-text" style={{ fontSize:22, fontWeight:700, margin:0, letterSpacing:'-0.02em' }}>Ssense Co-Pilot</h2>
+                  <p style={{ color:'var(--ssense-text-secondary)', fontSize:13, marginTop:8, lineHeight:1.5 }}>Ask anything about {activeSite}'s data practices.</p>
                   <div className="ssense-quick-prompts">
                     {quickPrompts.map((p, i) => <button key={i} className="ssense-quick-prompt" onClick={() => handleSend(p)}>{p}</button>)}
                   </div>
@@ -725,11 +938,11 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleSend()}
-            placeholder={isSystemPage ? 'Disabled on system pages' : isOffline ? 'Chat requires an internet connection' : cooldownLeft > 0 ? `Chat resumes in ${cooldownLeft}s…` : 'Ask about this site\'s privacy practices…'}
+            placeholder={isSystemPage ? 'Disabled on system pages' : !activeSite ? 'Select a site above to chat…' : isOffline ? 'Chat requires an internet connection' : cooldownLeft > 0 ? `Chat resumes in ${cooldownLeft}s…` : `Ask about ${activeSite}'s privacy practices…`}
             className="ssense-input-field"
-            disabled={isChatting || !domain || isSystemPage || !serviceAvailable || cooldownLeft > 0 || isOffline}
+            disabled={isChatting || !activeSite || isSystemPage || !serviceAvailable || cooldownLeft > 0 || isOffline}
           />
-          <button onClick={() => handleSend()} disabled={!input.trim() || isChatting || !domain || isSystemPage || !serviceAvailable || cooldownLeft > 0 || isOffline} className={`ssense-send-btn${input.trim() && !isChatting && cooldownLeft === 0 && !isOffline ? ' active' : ''}`}>
+          <button onClick={() => handleSend()} disabled={!input.trim() || isChatting || !activeSite || isSystemPage || !serviceAvailable || cooldownLeft > 0 || isOffline} className={`ssense-send-btn${input.trim() && !isChatting && cooldownLeft === 0 && !isOffline ? ' active' : ''}`}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
           </button>
         </div>

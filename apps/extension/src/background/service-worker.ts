@@ -16,6 +16,7 @@ import * as auditCache from './audit-cache';
 import * as historyStore from './history-store';
 import * as chatStore from './chat-store';
 import * as offlineCacheManager from './offline-cache-manager';
+import * as siteSession from './site-session';
 import type { ServiceResponse } from '../types/server-protocol';
 
 console.log('[Ssense] Service Worker v6.1 — multi-user scale, streaming chat, offline-first cache.');
@@ -100,6 +101,21 @@ chrome.runtime.onConnect.addListener((port) => {
         return;
       }
 
+      // Source of truth for "which thread is this message for" is the
+      // background's own active-site record, NOT whatever the sender
+      // claims — this is what makes cross-thread bleed structurally
+      // impossible instead of merely unlikely. A stale UI (e.g. a port
+      // opened just before the user deselected) gets rejected here.
+      const active = await siteSession.getActiveSite();
+      if (!active) {
+        port.postMessage({ type: 'ERROR', error: 'No site is selected for chat. Select a site first.', errorKind: 'no_active_site' });
+        return;
+      }
+      if (auditCache.normaliseDomain(domain) !== active) {
+        port.postMessage({ type: 'ERROR', error: `"${active}" is the selected thread — this message was for a different site and was not sent.`, errorKind: 'stale_thread' });
+        return;
+      }
+
       await enqueueChat(domain, async () => {
         try {
           const res = await executeChat(
@@ -117,6 +133,15 @@ chrome.runtime.onConnect.addListener((port) => {
           if (res.type === 'CHAT_RESULT' && res.success) {
             await chatStore.addMessage(domain, 'user', userPrompt);
             await chatStore.addMessage(domain, 'ai', res.message);
+            // If the user switched the active thread away while this
+            // request was in flight, the reply still lands correctly in
+            // storage (keyed by `domain`, not by "whatever's on screen"),
+            // and the now-background thread is flagged unread instead of
+            // being lost or misrouted.
+            const stillActive = await siteSession.getActiveSite();
+            if (stillActive !== auditCache.normaliseDomain(domain)) {
+              await siteSession.markUnread(domain);
+            }
             port.postMessage({ type: 'DONE', fullText: res.message, rateLimit: res.rateLimit });
           } else {
             const errRes = res as any;
@@ -243,19 +268,52 @@ async function handleMessage(msg: any, sender: chrome.runtime.MessageSender): Pr
       return {success:true,entry:e??null};
     }
 
-    // ── Chat (Serialized per-domain) ──────────────────────────────────────
+    // ── Chat (Serialized per-domain, gated to the active thread) ───────────
     case 'CHAT': {
+      const active = await siteSession.getActiveSite();
+      if (!active) return { success:false, error:'No site is selected for chat. Select a site first.', errorKind:'no_active_site' };
+      if (auditCache.normaliseDomain(msg.domain) !== active) {
+        return { success:false, error:`"${active}" is the selected thread.`, errorKind:'stale_thread' };
+      }
       return enqueueChat(msg.domain, async () => {
         const r=await executeChat(msg.domain,msg.userPrompt,requestId,undefined,msg.responseMode);
         if (r.type==='CHAT_RESULT'&&r.success) {
           await chatStore.addMessage(msg.domain,'user',msg.userPrompt);
           await chatStore.addMessage(msg.domain,'ai',r.message);
+          const stillActive = await siteSession.getActiveSite();
+          if (stillActive !== auditCache.normaliseDomain(msg.domain)) {
+            await siteSession.markUnread(msg.domain);
+          }
         }
         return r;
       });
     }
     case 'GET_CHAT_HISTORY': return {success:true,messages:await chatStore.getMessagesForDomain(msg.domain)};
-    case 'CLEAR_CHAT_HISTORY': { await chatStore.clearMessagesForDomain(msg.domain); return {success:true}; }
+    case 'CLEAR_CHAT_HISTORY': {
+      await chatStore.clearMessagesForDomain(msg.domain);
+      await siteSession.removeFromQueue(msg.domain);
+      return {success:true};
+    }
+
+    // ── Site-thread queue: single active thread, explicit select/deselect ──
+    case 'GET_SITE_QUEUE': return { success:true, queue: await siteSession.getQueue(), active: await siteSession.getActiveSite() };
+    case 'SELECT_SITE_THREAD': {
+      if (!msg.domain) return { success:false, error:'Missing domain.' };
+      const r = await siteSession.selectSite(msg.domain);
+      return { success: r.ok, error: r.error };
+    }
+    case 'DESELECT_SITE_THREAD': { await siteSession.deselectSite(); return { success:true }; }
+    case 'REMOVE_SITE_THREAD': {
+      if (!msg.domain) return { success:false, error:'Missing domain.' };
+      await chatStore.clearMessagesForDomain(msg.domain);
+      await siteSession.removeFromQueue(msg.domain);
+      return { success:true };
+    }
+    case 'TOGGLE_PIN_SITE_THREAD': {
+      if (!msg.domain) return { success:false, error:'Missing domain.' };
+      await siteSession.togglePin(msg.domain);
+      return { success:true, queue: await siteSession.getQueue() };
+    }
 
     // ── Engine config ─────────────────────────────────────────────────────
     case 'GET_ENGINE_CONFIG': {
@@ -317,6 +375,9 @@ async function _triggerAudit(
           age_days:   (r as any).age_days??0,
         });
         await historyStore.recordAudit(domain,r.report);
+        // Joins the site-thread queue (unselected) so it's pickable for
+        // chat without forcing it to become the active thread.
+        await siteSession.ensureQueued(domain);
 
         if (!forceRefresh) _lru.set(ck,{ts:Date.now(),resp:r});
 

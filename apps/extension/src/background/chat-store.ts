@@ -34,10 +34,7 @@ export interface ChatMessage {
 
 let _dbPromise: Promise<IDBDatabase> | null = null;
 
-/** Normalise domain the same way audit-cache.ts does. */
-function normaliseDomain(domain: string): string {
-  return domain.toLowerCase().replace(/^www\./, '');
-}
+import { normaliseDomain } from '../utils/domain';
 
 function openDb(): Promise<IDBDatabase> {
   if (_dbPromise) return _dbPromise;
