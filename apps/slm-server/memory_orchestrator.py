@@ -13,9 +13,10 @@ Changes from v2:
 import asyncio
 import hashlib
 import os
+import re
 import time
 from collections import OrderedDict, deque
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from audit_store import audit_store
 
@@ -233,6 +234,30 @@ class InferenceQueue:
         self._sem.release()
 
 
+# ── Global orchestrator domain & brand matchers ─────────────────────────────
+_DOMAIN_REGEX = re.compile(
+    r'\b(?:https?://)?(?:www\.)?([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*(?:\.[a-zA-Z]{2,}))(?::\d+)?(?:/[^\s]*)?',
+    re.IGNORECASE
+)
+
+_WORD_REGEX = re.compile(r'\b[a-zA-Z0-9-]{3,30}\b')
+
+_STOP_WORDS = {
+    "what", "about", "their", "privacy", "policy", "does", "data", "share", "sell",
+    "compare", "between", "which", "compliance", "dpdp", "safe", "score", "audit",
+    "violations", "site", "website", "online", "terms", "service", "help", "with",
+    "from", "into", "that", "this", "have", "more", "less", "good", "better", "tell",
+    "user", "users", "they", "them", "then", "than", "when", "where", "whom", "whose",
+    "explain", "show", "give", "find", "check", "know", "think", "please", "statute",
+    "act", "section", "rules", "india", "law", "legal", "clause", "penalty", "board",
+    "none", "true", "false", "some", "most", "each", "every", "other", "same", "also"
+}
+
+_EXCLUDED_EXTS = {
+    "js", "py", "css", "html", "json", "png", "jpg", "txt", "pdf", "md", "ts", "tsx", "svg"
+}
+
+
 # ── Global orchestrator ───────────────────────────────────────────────────────
 class MemoryOrchestrator:
     def __init__(self):
@@ -292,13 +317,64 @@ class MemoryOrchestrator:
             max_queue_wait_seconds=float(os.getenv("SSENSE_MAX_QUEUE_WAIT_SECONDS", "20")),
         )
 
-    @staticmethod
-    def _normalise(domain: str) -> str:
+    @classmethod
+    def _normalise(cls, domain: str) -> str:
         low = domain.strip().lower()
+        for prefix in ("https://", "http://"):
+            if low.startswith(prefix):
+                low = low[len(prefix):]
+        low = low.split("/")[0].split("?")[0].split(":")[0]
         for pfx in ("www.", "en.", "m.", "app."):
             if low.startswith(pfx):
                 low = low[len(pfx):]
         return low
+
+    async def resolve_mentioned_domains(
+        self, prompt: str, current_domain: Optional[str] = None
+    ) -> Tuple[Dict[str, str], List[str]]:
+        """
+        Scans user chat prompt for domain names or audited brand names, plus current_domain.
+        Returns:
+            audited_contexts: Dict[domain_str, chat_context_str]
+            unaudited_domains: List[domain_str]
+        """
+        audited: Dict[str, str] = {}
+        unaudited: List[str] = []
+
+        norm_current = self._normalise(current_domain) if current_domain else ""
+        if norm_current and norm_current not in ("newtab", "blank", "localhost"):
+            current_ctx = await self.get_chat_context(norm_current)
+            if current_ctx:
+                audited[norm_current] = current_ctx
+
+        # 1. Regex search for explicit domain names or URLs in prompt
+        candidate_domains: Set[str] = set()
+        for raw in _DOMAIN_REGEX.findall(prompt):
+            norm = self._normalise(raw)
+            parts = norm.split('.')
+            if len(parts) >= 2 and parts[-1] not in _EXCLUDED_EXTS:
+                candidate_domains.add(norm)
+
+        # 2. Candidate brand names (e.g. user says 'Zomato', 'Amazon')
+        for word in _WORD_REGEX.findall(prompt.lower()):
+            if word not in _STOP_WORDS and '.' not in word and not word.isdigit():
+                matched_dom = await audit_store.find_audited_domain_by_name(word)
+                if matched_dom:
+                    candidate_domains.add(self._normalise(matched_dom))
+
+        # 3. Resolve audit contexts for each mentioned domain
+        for d in sorted(list(candidate_domains)):
+            if d == norm_current:
+                continue
+            if len(audited) >= 5:  # Bound to top 5 domains to protect prompt context
+                break
+            ctx = await self.get_chat_context(d)
+            if ctx:
+                audited[d] = ctx
+            else:
+                unaudited.append(d)
+
+        return audited, unaudited
 
     async def verify_rate_limiter_backend(self) -> None:
         if self.using_redis:

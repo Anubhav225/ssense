@@ -982,13 +982,23 @@ async def chat(request: Request, body: ChatRequest):
     mode       = "thinking" if body.responseMode == "thinking" else "concise"
     max_tokens = CHAT_MAX_TOKENS_THINKING if mode == "thinking" else CHAT_MAX_TOKENS_CONCISE
 
-    # ── Audit gate (fast: reads pre-computed context string) ───────────────
-    chat_context = await memory_orchestrator.get_chat_context(body.domain)
-    if chat_context is None:
+    # ── Audit gate (reads pre-computed context for current site + mentioned domains) ─
+    audited_contexts, unaudited_domains = await memory_orchestrator.resolve_mentioned_domains(
+        clean_prompt, current_domain=body.domain
+    )
+    if not audited_contexts:
         async def _gate():
-            yield f"data: {json.dumps({'event':'token','data':'Please run an Audit on this site before chatting.'})}\n\n"
+            yield f"data: {json.dumps({'event':'token','data':'Please run an Audit on this site (or mention an audited site) before chatting.'})}\n\n"
             yield f"data: {json.dumps({'event':'done'})}\n\n"
         return StreamingResponse(_gate(), media_type="text/event-stream", headers=rate_limit_headers)
+
+    # Format multi-site audit summaries into system prompt
+    audit_blocks = [
+        f"[AUDIT SUMMARY FOR {d}]\n{ctx}" for d, ctx in audited_contexts.items()
+    ]
+    for d in unaudited_domains:
+        audit_blocks.append(f"[AUDIT STATUS FOR {d}]\nNot yet audited in Ssense.")
+    all_audit_context_str = "\n\n".join(audit_blocks)
 
     # ── Request coalescing ─────────────────────────────────────────────────
     task_key = memory_orchestrator.compute_sha256(
@@ -1034,21 +1044,27 @@ async def chat(request: Request, body: ChatRequest):
                 # When retrieve_context returns "" (no confident hits), omit it
                 # entirely — the model was trained to produce RAFT refusal phrases
                 # when context is absent, not to hallucinate from XML stubs.
+                if len(audited_contexts) == 1 and body.domain in audited_contexts:
+                    target_label = body.domain
+                else:
+                    target_label = ", ".join(audited_contexts.keys())
+
                 user_content = (
-                    f"{context_str}\n\nQuestion about {body.domain}: {clean_prompt}"
+                    f"{context_str}\n\nQuestion about {target_label}: {clean_prompt}"
                     if context_str
-                    else f"Question about {body.domain}: {clean_prompt}"
+                    else f"Question about {target_label}: {clean_prompt}"
                 )
 
                 # Multi-turn history injection
-                history_prompt = await multi_user_session_manager.get_history_prompt(user_id, body.domain)
+                session_domain = body.domain if (body.domain and body.domain not in ("newtab", "blank", "localhost")) else list(audited_contexts.keys())[0]
+                history_prompt = await multi_user_session_manager.get_history_prompt(user_id, session_domain)
                 history_block = f"\n{history_prompt}" if history_prompt else ""
 
                 prompt = (
                     "<|im_start|>system\nYou are the Ssense DPDP Co-Pilot. "
                     "Ground ALL answers in the retrieved context and audit report.\n"
                     f"RESPONSE LENGTH: {length_instr}\n\n"
-                    f"[AUDIT SUMMARY FOR {body.domain}]\n{chat_context}<|im_end|>{history_block}\n"
+                    f"{all_audit_context_str}<|im_end|>{history_block}\n"
                     f"<|im_start|>user\n{user_content}<|im_end|>\n"
                     "<|im_start|>assistant\n"
                 )
@@ -1065,7 +1081,7 @@ async def chat(request: Request, body: ChatRequest):
 
                 if generated_tokens:
                     await multi_user_session_manager.record_turn(
-                        user_id, body.domain, clean_prompt, "".join(generated_tokens)
+                        user_id, session_domain, clean_prompt, "".join(generated_tokens)
                     )
             finally:
                 memory_orchestrator.inference_queue.release()

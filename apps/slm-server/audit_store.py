@@ -42,6 +42,10 @@ PRUNE_INTERVAL_S    = 6 * 60 * 60           # 6 hours
 
 def _normalise(domain: str) -> str:
     low = domain.strip().lower()
+    for prefix in ("https://", "http://"):
+        if low.startswith(prefix):
+            low = low[len(prefix):]
+    low = low.split("/")[0].split("?")[0].split(":")[0]
     for prefix in ("www.", "en.", "m.", "app."):
         if low.startswith(prefix):
             low = low[len(prefix):]
@@ -54,12 +58,34 @@ def _now() -> int:
 
 class AuditStore:
     def __init__(self, db_path: Path):
-        self._db_path   = db_path
+        self._db_path   = Path(db_path)
         self._db: Optional[aiosqlite.Connection] = None
         self._prune_task: Optional[asyncio.Task] = None
         self._write_lock = asyncio.Lock()
         # In-memory hot cache for get_chat_context: domain -> (context, cached_timestamp)
         self._chat_context_cache: Dict[str, Tuple[str, float]] = {}
+
+    async def find_audited_domain_by_name(self, name: str) -> Optional[str]:
+        """Finds if a brand name or prefix matches an audited domain (e.g. 'zomato' -> 'zomato.com')."""
+        name_clean = name.strip().lower()
+        if not name_clean or len(name_clean) < 3:
+            return None
+        # Check direct common TLDs first
+        for tld in (".com", ".in", ".org", ".co.in", ".io", ".net", ".ai"):
+            candidate = f"{name_clean}{tld}"
+            row = await self._fetch_row(candidate)
+            if row:
+                return candidate
+        # Check prefix match in SQLite
+        if self._db:
+            cur = await self._db.execute(
+                "SELECT domain_key FROM audit_cache WHERE domain_key LIKE ? LIMIT 1",
+                (f"{name_clean}.%",)
+            )
+            row = await cur.fetchone()
+            if row:
+                return row["domain_key"]
+        return None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
     async def initialize(self) -> None:
