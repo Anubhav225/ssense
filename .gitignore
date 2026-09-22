@@ -88,6 +88,8 @@ ml/models/base/
 ml/models/.cache/
 ml/models/*-gguf/
 ml/models/*-gguf_gguf/
+ml/models/bge-small-en-v1.5/
+ml/models/bge-reranker-v2-m3/
 
 # ------------------------------------------------------------------------------
 # Rust / Cargo (libs/rust-utils & root)

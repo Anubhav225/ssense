@@ -183,6 +183,8 @@ async def lifespan(app: FastAPI):
     await db_sync.final_export(audit_store._db_path)
     await audit_store.close()
     await close_policy_fetch_clients()
+    if hasattr(rag_engine, "thread_pool"):
+        rag_engine.thread_pool.shutdown(wait=False)
 
 
 app = FastAPI(
@@ -865,6 +867,8 @@ async def audit_by_url(request: Request, body: AuditByUrlRequest):
                 return JSONResponse(content=resp_data, headers=audit_headers)
 
         # ── 4. Inference ───────────────────────────────────────────────────────
+        if llm_engine is None:
+            raise HTTPException(503, "SLM engine is still initializing. Please wait a few moments.")
         async with _admitted():
             clean_text = sanitize_input_prompt(fetch.text, is_audit_policy=True)
             report     = await _run_inference(body.domain, clean_text)
@@ -911,6 +915,8 @@ async def audit_by_text(request: Request, body: AuditByTextRequest):
             del clean_text
             return _audit_response(meta.get("source", "persistent_cache"), report, meta)
 
+    if llm_engine is None:
+        raise HTTPException(503, "SLM engine is still initializing. Please wait a few moments.")
     async with _admitted():
         report   = await _run_inference(body.domain, clean_text)
         del clean_text
@@ -953,6 +959,8 @@ async def chat(request: Request, body: ChatRequest):
     Chat context read from pre-computed audit_store.chat_context — no JSON
     parsing on this hot path.
     """
+    if llm_engine is None:
+        raise HTTPException(503, "SLM engine is still initializing. Please wait a few moments.")
     user_header = request.headers.get("X-Ssense-User-Id", "")
     api_key = request.headers.get("X-Ssense-API-Key", "")
     user_id = f"{api_key}:{user_header}" if user_header else f"{api_key}:{get_client_ip(request)}"
@@ -1108,4 +1116,4 @@ async def chat(request: Request, body: ChatRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, workers=1, log_level="info")
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, workers=1, log_level="info", lifespan="on")

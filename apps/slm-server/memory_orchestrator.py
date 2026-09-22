@@ -227,15 +227,17 @@ class InferenceQueue:
             if self._waiting >= self.max_waiting:
                 raise QueueSaturatedError(self._waiting, self.max_concurrent)
             self._waiting += 1
+        acquired = False
         try:
-            try:
-                await asyncio.wait_for(self._sem.acquire(), timeout=self.max_queue_wait_seconds)
-            except asyncio.TimeoutError:
-                raise QueueSaturatedError(self._waiting, self.max_concurrent, timed_out=True)
+            await asyncio.wait_for(self._sem.acquire(), timeout=self.max_queue_wait_seconds)
+            acquired = True
+        except asyncio.TimeoutError:
+            raise QueueSaturatedError(self._waiting, self.max_concurrent, timed_out=True)
         finally:
             async with self._admit_lock:
                 self._waiting -= 1
-                self._in_flight += 1
+                if acquired:
+                    self._in_flight += 1
 
     def release(self) -> None:
         self._in_flight = max(0, self._in_flight - 1)

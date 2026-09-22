@@ -82,6 +82,15 @@ class StopAtClosingBrace:
         return False
 
 
+class CancelOnEvent:
+    """Stops generation immediately if cancellation event is set."""
+    def __init__(self, stop_event: threading.Event):
+        self.stop_event = stop_event
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+        return self.stop_event.is_set()
+
+
 class ProductionAsyncEngine:
     def __init__(
         self,
@@ -367,11 +376,13 @@ class ProductionAsyncEngine:
     ) -> AsyncGenerator[str, None]:
         """Streams Conversational Chatbot tokens through the Chatbot LoRA in real-time."""
         if self.backend == "transformers":
-            streamer = self._TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=15.0)
+            stop_event = threading.Event()
+            # 120s timeout allows CPU prompt prefill and token generation without premature cutoff
+            streamer = self._TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=120.0)
             inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024).to("cpu")
             in_len = inputs["input_ids"].shape[1]
             chat_max = min(max_tokens, 200)
-            print(f"💬 [Engine/Chat] Streaming request: prompt={in_len} tokens, max_tokens={chat_max}...")
+            print(f"💬 [Engine/Chat] Streaming request: prompt={in_len} tokens, max_tokens={chat_max}...", flush=True)
 
             im_end_id = self.tokenizer.convert_tokens_to_ids("<|im_end|>")
             endoftext_id = self.tokenizer.convert_tokens_to_ids("<|endoftext|>")
@@ -380,6 +391,8 @@ class ProductionAsyncEngine:
                 if isinstance(sp_id, int) and sp_id not in eos_ids:
                     eos_ids.append(sp_id)
 
+            stopping_criteria = self._StoppingCriteriaList([CancelOnEvent(stop_event)])
+
             gen_kwargs = {
                 **inputs,
                 "streamer": streamer,
@@ -387,6 +400,7 @@ class ProductionAsyncEngine:
                 "do_sample": True if temperature > 0.0 else False,
                 "pad_token_id": self.tokenizer.pad_token_id,
                 "eos_token_id": eos_ids,
+                "stopping_criteria": stopping_criteria,
             }
             if temperature > 0.0:
                 gen_kwargs["temperature"] = temperature
@@ -397,12 +411,19 @@ class ProductionAsyncEngine:
                 nonlocal gen_error
                 try:
                     with self._lock:
+                        if stop_event.is_set():
+                            return
                         self.model.set_adapter("chatbot")
                         with torch.no_grad():
                             self.model.generate(**gen_kwargs)
                 except Exception as e:
                     gen_error = e
-                    print(f"🛑 [Engine/Chat] Generation error in background thread: {e}")
+                    print(f"🛑 [Engine/Chat] Generation error in background thread: {e}", flush=True)
+                finally:
+                    try:
+                        streamer.end()
+                    except Exception:
+                        pass
 
             thread = threading.Thread(target=_run_chat_gen, daemon=True)
             thread.start()
@@ -415,17 +436,24 @@ class ProductionAsyncEngine:
                 except (StopIteration, Exception):
                     return None
 
-            while True:
-                tok = await asyncio.to_thread(_get_next_token)
-                if tok is None:
-                    break
-                if "<|im_end|>" in tok:
-                    tok = tok.replace("<|im_end|>", "")
+            try:
+                while True:
+                    tok = await asyncio.to_thread(_get_next_token)
+                    if tok is None:
+                        break
+                    if "<|im_end|>" in tok:
+                        tok = tok.replace("<|im_end|>", "")
+                        if tok:
+                            yield tok
+                        break
                     if tok:
                         yield tok
-                    break
-                if tok:
-                    yield tok
+            finally:
+                stop_event.set()
+                try:
+                    streamer.end()
+                except Exception:
+                    pass
             return
 
         # vLLM path
