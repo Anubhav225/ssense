@@ -84,15 +84,21 @@ class SlidingWindowRateLimiter:
         self._lock    = asyncio.Lock()
 
     async def check(self, identifier: str) -> Tuple[bool, int]:
+        is_ltd, rem, _ = await self.check_with_reset(identifier)
+        return is_ltd, rem
+
+    async def check_with_reset(self, identifier: str) -> Tuple[bool, int, int]:
         async with self._lock:
             now = time.time()
             dq  = self._reqs.setdefault(identifier, deque())
             while dq and dq[0] < now - self._window:
                 dq.popleft()
             if len(dq) >= self._limit:
-                return True, 0
+                reset_after = max(1, int(dq[0] + self._window - now)) if dq else self._window
+                return True, 0, reset_after
             dq.append(now)
-            return False, self._limit - len(dq)
+            reset_after = max(1, int(dq[0] + self._window - now)) if dq else self._window
+            return False, self._limit - len(dq), reset_after
 
     # Alias expected by security.py
     async def check_rate_limit(self, identifier: str) -> Tuple[bool, int]:
@@ -258,6 +264,19 @@ class MemoryOrchestrator:
             print(f"⚠️  [Orchestrator] Redis unavailable ({e}); using in-process chat limiter.")
             self._chat_limiter = SlidingWindowRateLimiter(limit=60, window=60)
 
+        # Daily chat limiter (200 requests/day per user)
+        self._daily_chat_limiter = SlidingWindowRateLimiter(
+            limit=int(os.getenv("SSENSE_DAILY_CHAT_LIMIT", "200")),
+            window=86400,
+        )
+        # Soft audit tracker (1000 requests/day soft ceiling)
+        self._audit_soft_tracker = SlidingWindowRateLimiter(
+            limit=int(os.getenv("SSENSE_DAILY_AUDIT_SOFT_LIMIT", "1000")),
+            window=86400,
+        )
+        # Audit request coalescing
+        self.active_audits: Dict[str, asyncio.Future] = {}
+
         # Request coalescing for chat
         self.active_streams: Dict[str, StreamBroadcaster] = {}
         self._lock = asyncio.Lock()
@@ -306,6 +325,36 @@ class MemoryOrchestrator:
     # ── Chat rate limit ───────────────────────────────────────────────────
     async def enforce_chat_rate_limit(self, identifier: str) -> Tuple[bool, int]:
         return await self._chat_limiter.check_rate_limit(identifier)
+
+    async def enforce_daily_chat_rate_limit(self, identifier: str) -> Tuple[bool, int, int]:
+        return await self._daily_chat_limiter.check_with_reset(identifier)
+
+    async def record_audit_soft(self, identifier: str) -> int:
+        _, rem, _ = await self._audit_soft_tracker.check_with_reset(identifier)
+        return rem
+
+    # ── Audit request coalescing ──────────────────────────────────────────
+    async def acquire_audit_lease(self, domain_key: str) -> Tuple[bool, asyncio.Future]:
+        async with self._lock:
+            key = self._normalise(domain_key)
+            if key in self.active_audits:
+                return False, self.active_audits[key]
+            loop = asyncio.get_running_loop()
+            fut = loop.create_future()
+            self.active_audits[key] = fut
+            return True, fut
+
+    async def complete_audit_lease(
+        self, domain_key: str, result: Any = None, error: Optional[Exception] = None
+    ) -> None:
+        async with self._lock:
+            key = self._normalise(domain_key)
+            fut = self.active_audits.pop(key, None)
+            if fut and not fut.done():
+                if error:
+                    fut.set_exception(error)
+                else:
+                    fut.set_result(result)
 
     # ── Audit cache (two-tier) ────────────────────────────────────────────
     async def get_audit_for_domain(

@@ -5,6 +5,8 @@ declare global {
   interface Window {
     __ssenseObserverAttached?: boolean;
     __ssenseDarkPatternBlockerLoaded?: boolean;
+    __ssenseActiveObserver?: MutationObserver;
+    __ssenseActiveFingerprint?: string;
   }
 }
 
@@ -60,8 +62,21 @@ function highlightAndScrollToQuote(quote: string) {
 }
 
 function executeNetworkActions(report: DpdpAuditReport) {
-  if (window.__ssenseObserverAttached) return;
-  window.__ssenseObserverAttached = true;
+  const violationFingerprint = (report.violations || [])
+    .map(v => `${v.violation_type}:${v.network_action}:${(v.offending_entities || []).slice().sort().join(',')}`)
+    .sort()
+    .join('|');
+  const fingerprint = `${report.dpdp_trust_score}:${violationFingerprint}`;
+
+  // If already enforcing identical rules on this page, avoid redundant sweeps
+  if (window.__ssenseActiveFingerprint === fingerprint) return;
+  window.__ssenseActiveFingerprint = fingerprint;
+
+  // Disconnect previous observer if a re-audit brought updated violations
+  if (window.__ssenseActiveObserver) {
+    try { window.__ssenseActiveObserver.disconnect(); } catch {}
+    window.__ssenseActiveObserver = undefined;
+  }
 
   console.log(`[Ssense] Activating Real-Time Shield. Trust Score: ${report.dpdp_trust_score}`);
 
@@ -168,6 +183,7 @@ function executeNetworkActions(report: DpdpAuditReport) {
     attributeFilter: ['src', 'href'], // 🚀 SOTA: Catches dynamic tracker injections
     attributeOldValue: false
   });
+  window.__ssenseActiveObserver = observer;
   
   console.log('[Ssense] MutationObserver active. Shield is locked in.');
 }

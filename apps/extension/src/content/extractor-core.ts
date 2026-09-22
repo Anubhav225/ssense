@@ -54,6 +54,7 @@ const _HREF_SELECTORS = [
   'a[href*="trust-center"]', 'a[href*="do-not-sell"]',
   'a[href*="ccpa"]', 'a[href*="gdpr"]',
   'a[href*="privacy-center"]', 'a[href*="data-processing"]',
+  'a[data-href*="privacy"]', 'a[data-url*="privacy"]',
   'footer a', '[class*="footer"] a', '[class*="legal"] a', '[id*="footer"] a',
 ];
 const _COMBINED = _HREF_SELECTORS.join(', ');
@@ -97,7 +98,11 @@ export function findFallbackPolicyUrl(doc: Document, baseURI: string): string | 
 
   for (const bucket of buckets) {
     for (const a of bucket) {
-      const href = a.getAttribute('href');
+      let href = a.getAttribute('href');
+      // If href is missing, '#' or 'javascript:', inspect CMP data attributes
+      if (!href || href.startsWith('#') || href.startsWith('javascript:')) {
+        href = a.getAttribute('data-href') || a.getAttribute('data-url') || a.getAttribute('data-target') || null;
+      }
       const text = (a.textContent || '').toLowerCase();
       if (!href || href.startsWith('#') || href.startsWith('javascript:')) continue;
       const abs = resolveUrl(href, baseURI);

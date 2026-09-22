@@ -50,17 +50,41 @@ export async function getServerConfig(): Promise<ServerConfig> {
 }
 export { getServerConfig as getRouterConfig };  // legacy alias
 
+let _cachedUserId: string | null = null;
+export async function getOrCreateUserId(): Promise<string> {
+  if (_cachedUserId) return _cachedUserId;
+  try {
+    const d = await chrome.storage.local.get('ssense_user_id');
+    if (d.ssense_user_id) {
+      _cachedUserId = d.ssense_user_id;
+      return _cachedUserId!;
+    }
+  } catch {}
+  _cachedUserId = crypto.randomUUID();
+  try {
+    await chrome.storage.local.set({ ssense_user_id: _cachedUserId });
+  } catch {}
+  return _cachedUserId!;
+}
+
 // ─── HMAC signing ─────────────────────────────────────────────────────────────
 async function signedHeaders(cfg: ServerConfig, method: string, endpoint: string) {
   const ts    = Date.now().toString();
   const nonce = crypto.randomUUID();
+  const userId = await getOrCreateUserId();
   const key   = await crypto.subtle.importKey('raw', new TextEncoder().encode(cfg.hmacSecret),
     { name:'HMAC', hash:'SHA-256' }, false, ['sign']);
   const sig   = await crypto.subtle.sign('HMAC', key,
     new TextEncoder().encode(`${method.toUpperCase()}:${endpoint}:${ts}:${nonce}`));
   const hex   = Array.from(new Uint8Array(sig)).map(b=>b.toString(16).padStart(2,'0')).join('');
-  return { 'Content-Type':'application/json', 'X-Ssense-API-Key':cfg.apiKey,
-           'X-Ssense-Signature':hex, 'X-Ssense-Timestamp':ts, 'X-Ssense-Nonce':nonce };
+  return {
+    'Content-Type':       'application/json',
+    'X-Ssense-API-Key':   cfg.apiKey,
+    'X-Ssense-Signature': hex,
+    'X-Ssense-Timestamp': ts,
+    'X-Ssense-Nonce':     nonce,
+    'X-Ssense-User-Id':   userId,
+  };
 }
 
 // ─── Error types ──────────────────────────────────────────────────────────────
@@ -72,8 +96,19 @@ export class SsenseError extends Error {
   }
 }
 function classify(status: number, body: string): SsenseError {
-  if (status===401||status===403) return new SsenseError('Authentication failed. Check Settings.','auth',false,status);
-  if (status===429) return new SsenseError('Chat rate limit reached. Audits are not rate-limited.','server',true,status);
+  const bLower = body.toLowerCase();
+  if (status===401||status===403) {
+    if (bLower.includes('temporal') || bLower.includes('timestamp') || bLower.includes('clock') || bLower.includes('replay attack')) {
+      return new SsenseError(
+        'Request rejected: your device clock appears out of sync. Please check your system date & time settings.',
+        'auth',
+        false,
+        status,
+      );
+    }
+    return new SsenseError('Authentication failed. Check Settings.','auth',false,status);
+  }
+  if (status===429) return new SsenseError('Chat rate limit reached. Audits are not rate-limited.','server',false,status);
   if (status>=500)  return new SsenseError('AI service temporarily unavailable.','server',true,status);
   return new SsenseError(body||`HTTP ${status}`,'unknown',false,status);
 }
@@ -98,8 +133,15 @@ async function fetchJSON<T>(endpoint: string, method: 'GET'|'POST', body: any, c
       clearTimeout(tid);
       if (!r.ok) {
         const txt = await r.text().catch(()=>'');
-        if ((r.status>=500||r.status===429)&&i<retries) { await _delay(2**i*500); continue; }
-        throw classify(r.status,txt);
+        // Fail-fast on 429: do NOT waste retry quota or keep the user waiting
+        if (r.status === 429) {
+          throw classify(r.status, txt);
+        }
+        if (r.status >= 500 && i < retries) {
+          await _delay(2**i * 500);
+          continue;
+        }
+        throw classify(r.status, txt);
       }
       return r.json() as Promise<T>;
     } catch(e: any) {
@@ -167,10 +209,24 @@ export async function executeHealthCheck(requestId: string): Promise<ServiceResp
   const cfg = await getServerConfig();
   if (!cfg.configured) return {type:'ERROR',requestId,success:false,error:'Server not configured. Open Settings.',errorKind:'auth',retryable:false};
   try {
-    const d = await fetchJSON<any>('/health','GET',null,cfg);
-    return {type:'HEALTH_CHECK_RESULT',requestId,success:d.status==='online'&&d.rag_ready!==false,
-      modelLoaded:d.rag_ready!==false,cacheSize:d.audit_cache?.total_cached_domains??0,
-      totalInferences:0,avgTokensPerSecond:120,hasGpuAcceleration:false};
+    let d: any;
+    try {
+      d = await fetchJSON<any>('/v1/status', 'GET', null, cfg, 0);
+    } catch {
+      d = await fetchJSON<any>('/health', 'GET', null, cfg, 1);
+    }
+    const isOnline = (d.status === 'online' || d.online === true);
+    const modelOk  = d.rag_ready !== false && d.model_loaded !== false;
+    return {
+      type: 'HEALTH_CHECK_RESULT',
+      requestId,
+      success: isOnline && modelOk,
+      modelLoaded: modelOk,
+      cacheSize: d.audit_cache?.total_cached_domains ?? d.cached_domains ?? 0,
+      totalInferences: 0,
+      avgTokensPerSecond: 120,
+      hasGpuAcceleration: false,
+    };
   } catch(e) {
     const err=wrap(e,'Health check failed.');
     return {type:'ERROR',requestId,success:false,error:err.message,errorKind:err.kind,retryable:err.retryable};

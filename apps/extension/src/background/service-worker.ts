@@ -2,21 +2,52 @@
 //
 // Cloud-only, no native daemon, no PROXY_FETCH, no policy text storage.
 // Primary audit trigger: FOUND_POLICY_URL from extractor.ts → server fetches
-// and extracts → result saved to local audit-cache (chrome.storage.local).
+// and extracts → result saved to local audit-cache (IndexedDB).
+//
+// R5 upgrades:
+//   - Per-domain chat serialization queue (Map<domain, Promise>)
+//   - Long-lived port relay for real-time SSE token streaming
+//   - SWR offline-first audit resolution & cache pre-warming
+//   - MAX_CONCURRENT_AUDITS semaphore gate
+//   - Dynamic action badge reflecting live DPDP trust scores
 
 import { executeAuditByUrl, executeFetchCachedAudit, executeChat, executeHealthCheck, getServerConfig } from './api-client';
 import * as auditCache from './audit-cache';
 import * as historyStore from './history-store';
 import * as chatStore from './chat-store';
+import * as offlineCacheManager from './offline-cache-manager';
 import type { ServiceResponse } from '../types/server-protocol';
 
-console.log('[Ssense] Service Worker v6 — cloud-only, server-side extraction.');
+console.log('[Ssense] Service Worker v6.1 — multi-user scale, streaming chat, offline-first cache.');
+
+// Pre-warm top domains in the background
+offlineCacheManager.warmTopDomainCaches().catch(() => {});
 
 // ─── Notifications ─────────────────────────────────────────────────────────────
 function notify(id: string, title: string, message: string) {
   chrome.notifications.create(id, { type:'basic', iconUrl:'icons/icon128.png', title, message, priority:1 }, () => void chrome.runtime.lastError);
 }
 chrome.notifications.onClicked.addListener(id => { if (id.startsWith('ssense-')) chrome.action.openPopup?.().catch(()=>{}); });
+
+// ─── Action Badge Management ──────────────────────────────────────────────────
+async function updateActionBadge(domain: string | null) {
+  if (!domain) {
+    chrome.action.setBadgeText({ text: '' }).catch(() => {});
+    return;
+  }
+  try {
+    const entry = await auditCache.getAudit(domain);
+    if (!entry) {
+      chrome.action.setBadgeText({ text: '?' }).catch(() => {});
+      chrome.action.setBadgeBackgroundColor({ color: '#71717A' }).catch(() => {});
+      return;
+    }
+    const score = entry.trust_score;
+    chrome.action.setBadgeText({ text: String(score) }).catch(() => {});
+    const color = score >= 80 ? '#10B981' : score >= 50 ? '#F59E0B' : '#F43F5E';
+    chrome.action.setBadgeBackgroundColor({ color }).catch(() => {});
+  } catch {}
+}
 
 // ─── Time-on-site tracking ─────────────────────────────────────────────────────
 let _domain: string|null=null, _since: number|null=null, _focused=true;
@@ -26,7 +57,11 @@ async function startTracking(d: string|null) { await flush(); _domain=d; _since=
 async function syncTab() {
   const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true}).catch(()=>[]);
   const d=hostnameOf(tab?.url);
-  if (d!==_domain) { if (d) await historyStore.recordVisit(d); await startTracking(d); }
+  if (d!==_domain) {
+    if (d) await historyStore.recordVisit(d);
+    await startTracking(d);
+  }
+  updateActionBadge(d).catch(() => {});
 }
 chrome.tabs.onActivated.addListener(()=>syncTab());
 chrome.tabs.onUpdated.addListener((_,i,t)=>{ if (i.status==='complete'&&t.active) syncTab(); });
@@ -37,10 +72,77 @@ chrome.windows.onFocusChanged.addListener(async wid=>{
 setInterval(()=>{ flush().then(()=>{ _since=(_domain&&_focused)?Date.now():null; }); }, 20_000);
 syncTab();
 
-// ─── In-flight deduplication (30-min LRU) ─────────────────────────────────────
+// ─── Chat Queue per domain ────────────────────────────────────────────────────
+const _chatQueues = new Map<string, Promise<any>>();
+async function enqueueChat<T>(domain: string, task: () => Promise<T>): Promise<T> {
+  const norm = auditCache.normaliseDomain(domain);
+  const prev = _chatQueues.get(norm) || Promise.resolve();
+  const current = prev.catch(() => {}).then(task);
+  _chatQueues.set(norm, current);
+  try {
+    return await current;
+  } finally {
+    if (_chatQueues.get(norm) === current) {
+      _chatQueues.delete(norm);
+    }
+  }
+}
+
+// ─── Streaming Chat Relay (Long-lived port) ───────────────────────────────────
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'ssense-chat-stream') return;
+
+  port.onMessage.addListener(async (msg) => {
+    if (msg.type === 'START_CHAT') {
+      const { domain, userPrompt, responseMode, requestId } = msg;
+      if (!domain || !userPrompt) {
+        port.postMessage({ type: 'ERROR', error: 'Missing domain or userPrompt' });
+        return;
+      }
+
+      await enqueueChat(domain, async () => {
+        try {
+          const res = await executeChat(
+            domain,
+            userPrompt,
+            requestId || crypto.randomUUID(),
+            (delta, done) => {
+              try {
+                port.postMessage({ type: 'CHUNK', delta, done, domain });
+              } catch {}
+            },
+            responseMode || 'concise'
+          );
+
+          if (res.type === 'CHAT_RESULT' && res.success) {
+            await chatStore.addMessage(domain, 'user', userPrompt);
+            await chatStore.addMessage(domain, 'ai', res.message);
+            port.postMessage({ type: 'DONE', fullText: res.message, rateLimit: res.rateLimit });
+          } else {
+            const errRes = res as any;
+            port.postMessage({
+              type: 'ERROR',
+              error: errRes.error || 'Chat request failed',
+              errorKind: errRes.errorKind,
+              retryable: errRes.retryable,
+              rateLimit: errRes.rateLimit,
+            });
+          }
+        } catch (err: any) {
+          port.postMessage({ type: 'ERROR', error: err?.message || 'Chat stream failed' });
+        }
+      });
+    }
+  });
+});
+
+// ─── In-flight deduplication (30-min LRU) & Audit Concurrency Gate ───────────
 const _active  = new Map<string,Promise<ServiceResponse>>();
 const _lru     = new Map<string,{ts:number;resp:ServiceResponse}>();
 const LRU_TTL  = 30*60*1000;
+const MAX_CONCURRENT_AUDITS = 3;
+let _concurrentAudits = 0;
+
 async function domainKey(domain: string, suffix='') {
   const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(`${domain}${suffix}`));
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
@@ -95,7 +197,8 @@ async function handleMessage(msg: any, sender: chrome.runtime.MessageSender): Pr
     case 'FETCH_CACHED_AUDIT': {
       const r=await executeFetchCachedAudit(String(msg.domain||''),requestId);
       if (r.type==='AUDIT_POLICY_RESULT'&&r.success) {
-        await auditCache.saveAudit(msg.domain,r.report,{source:'persistent_cache',cached:true} as any);
+        await auditCache.saveAudit(msg.domain,r.report,{source:'persistent_cache'} as any);
+        updateActionBadge(msg.domain).catch(() => {});
       }
       return r;
     }
@@ -103,16 +206,24 @@ async function handleMessage(msg: any, sender: chrome.runtime.MessageSender): Pr
     // ── Health check ──────────────────────────────────────────────────────
     case 'HEALTH_CHECK': return executeHealthCheck(requestId);
 
-    // ── Audit cache reads ─────────────────────────────────────────────────
+    // ── Audit cache reads (with SWR support) ──────────────────────────────
     case 'GET_LOCAL_AUDIT': {
       const entry=await auditCache.getAudit(String(msg.domain||''));
       return {success:true,entry:entry??null};
+    }
+    case 'GET_LOCAL_AUDIT_WITH_META': {
+      const meta = await offlineCacheManager.getAuditSWR(String(msg.domain || ''), msg.policyUrl);
+      return { success: true, ...meta };
     }
     case 'GET_ALL_AUDITS': {
       const entries=await auditCache.getAllAudits();
       return {success:true,entries};
     }
-    case 'CLEAR_AUDITS': { await auditCache.clearAllAudits(); return {success:true}; }
+    case 'CLEAR_AUDITS': {
+      await auditCache.clearAllAudits();
+      updateActionBadge(null).catch(() => {});
+      return {success:true};
+    }
 
     // ── Trust score (from local cache) ────────────────────────────────────
     case 'GET_TRUST_SCORE': {
@@ -132,25 +243,21 @@ async function handleMessage(msg: any, sender: chrome.runtime.MessageSender): Pr
       return {success:true,entry:e??null};
     }
 
-    // ── Chat ──────────────────────────────────────────────────────────────
+    // ── Chat (Serialized per-domain) ──────────────────────────────────────
     case 'CHAT': {
-      const r=await executeChat(msg.domain,msg.userPrompt,requestId,undefined,msg.responseMode);
-      if (r.type==='CHAT_RESULT'&&r.success) {
-        await chatStore.addMessage(msg.domain,'user',msg.userPrompt);
-        await chatStore.addMessage(msg.domain,'ai',r.message);
-      }
-      return r;
+      return enqueueChat(msg.domain, async () => {
+        const r=await executeChat(msg.domain,msg.userPrompt,requestId,undefined,msg.responseMode);
+        if (r.type==='CHAT_RESULT'&&r.success) {
+          await chatStore.addMessage(msg.domain,'user',msg.userPrompt);
+          await chatStore.addMessage(msg.domain,'ai',r.message);
+        }
+        return r;
+      });
     }
     case 'GET_CHAT_HISTORY': return {success:true,messages:await chatStore.getMessagesForDomain(msg.domain)};
     case 'CLEAR_CHAT_HISTORY': { await chatStore.clearMessagesForDomain(msg.domain); return {success:true}; }
 
     // ── Engine config ─────────────────────────────────────────────────────
-    // BUG FIX: this used to return the full ServerConfig object — including
-    // the plaintext apiKey/hmacSecret — to whatever caller asked, but the
-    // only caller (chat-widget.ts, a content script) only ever reads
-    // `.configured`. Redact the secret fields; nothing needs them outside
-    // api-client.ts itself, which reads them straight from getServerConfig()
-    // rather than round-tripping through a message.
     case 'GET_ENGINE_CONFIG': {
       const cfg = await getServerConfig();
       return { configured: cfg.configured, url: cfg.url, isOverride: cfg.isOverride };
@@ -182,21 +289,29 @@ async function _triggerAudit(
     const cached=_lru.get(ck);
     if (cached&&Date.now()-cached.ts<LRU_TTL) {
       const r=cached.resp;
-      if (r.type==='AUDIT_POLICY_RESULT'&&r.success&&tabId)
-        chrome.tabs.sendMessage(tabId,{type:'ENFORCE_DPDP_RULES',report:r.report}).catch(()=>{});
+      if (r.type==='AUDIT_POLICY_RESULT'&&r.success) {
+        updateActionBadge(domain).catch(() => {});
+        if (tabId) chrome.tabs.sendMessage(tabId,{type:'ENFORCE_DPDP_RULES',report:r.report}).catch(()=>{});
+      }
       return r;
     }
     const inflight=_active.get(ck);
     if (inflight) return inflight;
   }
 
+  // Concurrency gate
+  while (_concurrentAudits >= MAX_CONCURRENT_AUDITS) {
+    await new Promise(r => setTimeout(r, 200));
+  }
+
+  _concurrentAudits++;
   const exec=(async()=>{
     try {
       const r=await executeAuditByUrl(domain,policyUrl,requestId,forceRefresh);
 
       if (r.type==='AUDIT_POLICY_RESULT'&&r.success) {
-        // Save minimal entry to local cache (no policy text)
-        await auditCache.saveAudit(domain,r.report,{
+        // Save entry to IndexedDB local cache
+        const saved = await auditCache.saveAudit(domain,r.report,{
           policy_url: (r as any).policy_url||policyUrl,
           source:     (r as any).cached?'persistent_cache':'inference',
           age_days:   (r as any).age_days??0,
@@ -205,8 +320,16 @@ async function _triggerAudit(
 
         if (!forceRefresh) _lru.set(ck,{ts:Date.now(),resp:r});
 
-        chrome.runtime.sendMessage({type:'AUDIT_COMPLETE',domain,
-          score:r.report.dpdp_trust_score,report:r.report}).catch(()=>{});
+        updateActionBadge(domain).catch(() => {});
+
+        chrome.runtime.sendMessage({
+          type:'AUDIT_COMPLETE',
+          domain,
+          score:r.report.dpdp_trust_score,
+          report:r.report,
+          source: saved.source,
+          previousScore: saved.previous_trust_score,
+        }).catch(()=>{});
 
         if (r.report.dpdp_trust_score<40)
           notify(`ssense-${domain}`,`Low privacy score: ${domain}`,
@@ -218,7 +341,10 @@ async function _triggerAudit(
           error:r.error,errorKind:r.errorKind,retryable:r.retryable}).catch(()=>{});
       }
       return r;
-    } finally { _active.delete(ck); }
+    } finally {
+      _concurrentAudits--;
+      _active.delete(ck);
+    }
   })();
 
   if (!forceRefresh) _active.set(ck,exec);

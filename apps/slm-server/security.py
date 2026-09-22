@@ -201,28 +201,53 @@ async def _verify_hmac_body(request: Request) -> bool:
 
 async def verify_hmac_signature(request: Request) -> bool:
     """
-    API-key check + HMAC validation. NO rate limiting.
-    Used by audit endpoints — results are shared server-wide so the expensive
-    inference path rarely runs; blanket throttling harms honest users for no gain.
+    API-key check + HMAC validation. NO hard rate limiting.
+    Tracks soft audit limit per user/IP. Used by audit endpoints — results are
+    shared server-wide so the expensive inference path rarely runs.
     """
-    await _verify_api_key_only(request)
+    api_key = await _verify_api_key_only(request)
+    user_header = request.headers.get("X-Ssense-User-Id", "")
+    identifier = f"audit:{api_key}:{user_header}" if user_header else f"audit:{api_key}:{get_client_ip(request)}"
+    remaining_soft = await memory_orchestrator.record_audit_soft(identifier)
+    request.state.audit_remaining = remaining_soft
     return await _verify_hmac_body(request)
 
 
 async def verify_hmac_signature_chat(request: Request) -> bool:
     """
     API-key check + HMAC validation + per-user chat rate limiting.
-    Rate limit: 60 requests/minute per (api_key + client_ip).
-    Applied only to /v1/chat/stream — audit is intentionally excluded.
+    Rate limit: 60 requests/minute AND 200 requests/day per user/client IP.
+    Applied only to /v1/chat/stream — audit is intentionally not hard rate-limited.
     """
     api_key = await _verify_api_key_only(request)
-    client_id = f"chat:{api_key}:{get_client_ip(request)}"
-    is_limited, _ = await memory_orchestrator.enforce_chat_rate_limit(client_id)
+    user_header = request.headers.get("X-Ssense-User-Id", "")
+    client_id = f"chat:{api_key}:{user_header}" if user_header else f"chat:{api_key}:{get_client_ip(request)}"
+
+    # 1. Per-minute limit (60 req/min)
+    is_limited, rem_min = await memory_orchestrator.enforce_chat_rate_limit(client_id)
     if is_limited:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Chat rate limit exceeded (60 req/min per user). Audit requests are not rate-limited.",
+            headers={"Retry-After": "60", "X-RateLimit-Remaining": "0", "X-RateLimit-Limit": "60"},
         )
+
+    # 2. Per-day limit (200 req/day)
+    is_daily_limited, rem_day, reset_after_s = await memory_orchestrator.enforce_daily_chat_rate_limit(client_id)
+    if is_daily_limited:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Daily chat quota exceeded (200 req/day per user). Resets tomorrow. Audit requests are not rate-limited.",
+            headers={
+                "Retry-After": str(reset_after_s),
+                "X-RateLimit-Remaining": "0",
+                "X-RateLimit-Limit": "200",
+                "X-RateLimit-Reset": str(reset_after_s),
+            },
+        )
+
+    request.state.chat_remaining_min = rem_min
+    request.state.chat_remaining_day = rem_day
     return await _verify_hmac_body(request)
 
 

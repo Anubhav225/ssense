@@ -57,7 +57,9 @@ class AuditStore:
         self._db_path   = db_path
         self._db: Optional[aiosqlite.Connection] = None
         self._prune_task: Optional[asyncio.Task] = None
-        self._lock      = asyncio.Lock()
+        self._write_lock = asyncio.Lock()
+        # In-memory hot cache for get_chat_context: domain -> (context, cached_timestamp)
+        self._chat_context_cache: Dict[str, Tuple[str, float]] = {}
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
     async def initialize(self) -> None:
@@ -109,7 +111,7 @@ class AuditStore:
         if self._db:
             await self._db.close()
 
-    # ── Public read ───────────────────────────────────────────────────────
+    # ── Public read (Lock-free concurrent readers under WAL mode) ─────────
     async def get(
         self,
         domain: str,
@@ -129,8 +131,8 @@ class AuditStore:
         if force_refresh:
             return None
 
-        async with self._lock:
-            row = await self._fetch_row(_normalise(domain))
+        key = _normalise(domain)
+        row = await self._fetch_row(key)
         if row is None:
             return None
 
@@ -143,7 +145,8 @@ class AuditStore:
         try:
             report = json.loads(row["report_json"])
         except json.JSONDecodeError:
-            await self._delete_row(_normalise(domain))
+            async with self._write_lock:
+                await self._delete_row(key)
             return None
 
         meta = {
@@ -157,19 +160,39 @@ class AuditStore:
         return report, meta
 
     async def get_chat_context(self, domain: str) -> Optional[str]:
-        """Fast path used by the chat endpoint — returns only the pre-computed
-        natural-language summary without loading the full report JSON."""
-        async with self._lock:
-            row = await self._fetch_row(_normalise(domain))
+        """Fast path used by the chat endpoint — checks memory LRU cache first,
+        then SQLite without reader locks under WAL mode."""
+        key = _normalise(domain)
+        now = _now()
+
+        # 1. Hot memory check (5-minute TTL)
+        cached = self._chat_context_cache.get(key)
+        if cached is not None:
+            ctx, ts = cached
+            if now - ts <= 300:
+                return ctx
+            self._chat_context_cache.pop(key, None)
+
+        # 2. SQLite fetch (lock-free)
+        row = await self._fetch_row(key)
         if row is None:
             return None
-        age = _now() - row["updated_at"]
+        age = now - row["updated_at"]
         if age > AUDIT_TTL_SECONDS:
             return None
         ctx = row["chat_context"]
-        return ctx if ctx else None
+        if not ctx:
+            return None
 
-    # ── Public write ──────────────────────────────────────────────────────
+        # 3. Store in hot memory cache (bounded to 500 entries)
+        if len(self._chat_context_cache) >= 500:
+            oldest_key = min(self._chat_context_cache.keys(), key=lambda k: self._chat_context_cache[k][1])
+            self._chat_context_cache.pop(oldest_key, None)
+        self._chat_context_cache[key] = (ctx, now)
+
+        return ctx
+
+    # ── Public write (Protected by write_lock) ────────────────────────────
     async def set(
         self,
         domain: str,
@@ -184,7 +207,7 @@ class AuditStore:
         report_json = json.dumps(report)
         now         = _now()
 
-        async with self._lock:
+        async with self._write_lock:
             existing = await self._fetch_row(key)
             if existing:
                 await self._db.execute(
@@ -213,11 +236,16 @@ class AuditStore:
                 )
             await self._db.commit()
 
+        # Update hot memory cache
+        if chat_context:
+            self._chat_context_cache[key] = (chat_context, now)
+
         print(f"💾 [AuditStore] Saved audit for {key} (score={trust_score})")
 
     async def delete(self, domain: str) -> bool:
         key = _normalise(domain)
-        async with self._lock:
+        self._chat_context_cache.pop(key, None)
+        async with self._write_lock:
             cur = await self._db.execute(
                 "DELETE FROM audit_cache WHERE domain_key = ?", (key,)
             )
@@ -225,14 +253,13 @@ class AuditStore:
         return cur.rowcount > 0
 
     async def stats(self) -> Dict[str, Any]:
-        async with self._lock:
-            cur  = await self._db.execute("SELECT COUNT(*) AS n FROM audit_cache")
-            r1   = await cur.fetchone()
-            cur2 = await self._db.execute(
-                "SELECT COUNT(*) AS n FROM audit_cache WHERE updated_at <= ?",
-                (_now() - AUDIT_TTL_SECONDS,),
-            )
-            r2 = await cur2.fetchone()
+        cur  = await self._db.execute("SELECT COUNT(*) AS n FROM audit_cache")
+        r1   = await cur.fetchone()
+        cur2 = await self._db.execute(
+            "SELECT COUNT(*) AS n FROM audit_cache WHERE updated_at <= ?",
+            (_now() - AUDIT_TTL_SECONDS,),
+        )
+        r2 = await cur2.fetchone()
         return {
             "total_cached_domains":  r1["n"] if r1 else 0,
             "expired_pending_prune": r2["n"] if r2 else 0,
@@ -248,18 +275,17 @@ class AuditStore:
         return await cur.fetchone()
 
     async def _delete_row(self, key: str) -> None:
-        async with self._lock:
-            await self._db.execute(
-                "DELETE FROM audit_cache WHERE domain_key = ?", (key,)
-            )
-            await self._db.commit()
+        await self._db.execute(
+            "DELETE FROM audit_cache WHERE domain_key = ?", (key,)
+        )
+        await self._db.commit()
 
     async def _background_pruner(self) -> None:
         while True:
             await asyncio.sleep(PRUNE_INTERVAL_S)
             try:
                 threshold = _now() - AUDIT_TTL_SECONDS
-                async with self._lock:
+                async with self._write_lock:
                     cur = await self._db.execute(
                         "DELETE FROM audit_cache WHERE updated_at <= ?", (threshold,)
                     )

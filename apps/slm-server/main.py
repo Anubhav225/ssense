@@ -43,7 +43,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
 from slowapi.errors import RateLimitExceeded
@@ -52,6 +52,7 @@ import db_sync
 from audit_store import audit_store
 from engine import ProductionAsyncEngine, detect_hardware_capabilities
 from memory_orchestrator import memory_orchestrator, QueueSaturatedError
+from multi_user_session import multi_user_session_manager
 from policy_fetcher import fetch_policy, FetchResult, close_shared_clients as close_policy_fetch_clients
 from rag_engine import rag_engine
 from security import (
@@ -198,7 +199,11 @@ app.add_middleware(
     # (only a fixed CORS "safelist" is exposed cross-origin) — without this,
     # the rate-limit headers below would be sent but silently unreadable by
     # api-client.ts, and the UI would have no way to show remaining chat quota.
-    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Window", "Retry-After"],
+    expose_headers=[
+        "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Window",
+        "X-DailyLimit-Limit", "X-DailyLimit-Remaining", "X-DailyLimit-Reset",
+        "X-Ssense-Audit-Remaining", "Retry-After",
+    ],
 )
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
@@ -562,12 +567,15 @@ def translate_audit_for_prompt(report: Dict[str, Any]) -> str:
 
 
 def _audit_response(source: str, report: Dict[str, Any], meta: Optional[Dict] = None) -> Dict:
+    age_days = meta.get("age_days") if meta else None
+    cache_age_hours = round(float(age_days) * 24.0, 1) if age_days is not None else 0.0
     return {
-        "source":    source,
-        "data":      report,
-        "cached_at": meta.get("cached_at") if meta else None,
-        "age_days":  meta.get("age_days")  if meta else None,
-        "policy_url":meta.get("policy_url","") if meta else "",
+        "source":           source,
+        "data":             report,
+        "cached_at":        meta.get("cached_at") if meta else None,
+        "age_days":         age_days,
+        "cache_age_hours":  cache_age_hours,
+        "policy_url":       meta.get("policy_url", "") if meta else "",
     }
 
 
@@ -766,6 +774,36 @@ async def health():
     }
 
 
+_status_memo: Optional[Dict[str, Any]] = None
+_status_memo_time: float = 0.0
+
+@app.get("/v1/status", tags=["Health"])
+async def status_probe():
+    """
+    Lightweight status probe for high-frequency client heartbeats and monitoring.
+    Memoized for 5 seconds to support 10k+ concurrent clients without DB/engine overhead.
+    """
+    global _status_memo, _status_memo_time
+    now = time.time()
+    if _status_memo and (now - _status_memo_time) < 5.0:
+        return _status_memo
+
+    q = memory_orchestrator.inference_queue
+    cache_stats = await audit_store.stats()
+    _status_memo = {
+        "online": True,
+        "status": "ready" if (llm_engine is not None) else "starting",
+        "cached_domains": cache_stats.get("total_cached_domains", 0),
+        "queue_depth": q.waiting,
+        "in_flight": q.in_flight,
+        "model_loaded": llm_engine is not None,
+        "active_sessions": multi_user_session_manager.active_session_count,
+        "timestamp": int(now),
+    }
+    _status_memo_time = now
+    return _status_memo
+
+
 # ── Audit: by URL (primary, preferred) ────────────────────────────────────────
 @app.post("/v1/audit/by-url", tags=["Inference"],
           dependencies=[Depends(verify_hmac_signature)])
@@ -776,43 +814,72 @@ async def audit_by_url(request: Request, body: AuditByUrlRequest):
     """
     await check_model_extraction_attempt(request, body.policyUrl)
 
+    audit_headers = {
+        "X-Ssense-Audit-Remaining": str(getattr(request.state, "audit_remaining", 1000))
+    }
+
     # ── 1. Domain-level cache check ────────────────────────────────────────
     if not body.force_refresh:
         cached = await memory_orchestrator.get_audit_for_domain(body.domain)
         if cached:
             report, meta = cached
             print(f"⚡ [Audit/URL] Domain cache hit: {body.domain} ({meta.get('source')})")
-            return _audit_response(meta.get("source", "persistent_cache"), report, meta)
+            return JSONResponse(
+                content=_audit_response(meta.get("source", "persistent_cache"), report, meta),
+                headers=audit_headers,
+            )
 
-    # ── 2. Fetch + extract ─────────────────────────────────────────────────
-    fetch: FetchResult = await fetch_policy(body.policyUrl, force=body.force_refresh)
-    if not fetch.ok:
-        raise HTTPException(422, f"Could not extract policy: {fetch.error}")
+    # ── Request coalescing: prevent duplicate simultaneous audits for the same domain ──
+    is_leader, lease_fut = await memory_orchestrator.acquire_audit_lease(body.domain)
+    if not is_leader and not body.force_refresh:
+        try:
+            print(f"👥 [Audit/URL] Coalescing follower waiting on leader audit for {body.domain}...")
+            coalesced_result = await asyncio.wait_for(lease_fut, timeout=90.0)
+            return JSONResponse(content=coalesced_result, headers=audit_headers)
+        except Exception as e:
+            print(f"⚠️ [Audit/URL] Follower lease wait failed for {body.domain} ({e}), falling back to independent audit")
+            is_leader, lease_fut = await memory_orchestrator.acquire_audit_lease(body.domain)
 
-    # ── 3. Policy-hash cache check (unchanged policy → same result) ────────
-    if not body.force_refresh:
-        cached = await memory_orchestrator.get_audit_for_domain(
-            body.domain, policy_hash=fetch.policy_hash
-        )
-        if cached:
-            report, meta = cached
-            print(f"⚡ [Audit/URL] Hash match: {body.domain}")
-            return _audit_response("persistent_cache:hash_match", report, meta)
+    try:
+        # ── 2. Fetch + extract ─────────────────────────────────────────────────
+        fetch: FetchResult = await fetch_policy(body.policyUrl, force=body.force_refresh)
+        if not fetch.ok:
+            raise HTTPException(422, f"Could not extract policy: {fetch.error}")
 
-    # ── 4. Inference ───────────────────────────────────────────────────────
-    async with _admitted():
-        clean_text = sanitize_input_prompt(fetch.text, is_audit_policy=True)
-        report     = await _run_inference(body.domain, clean_text)
+        # ── 3. Policy-hash cache check (unchanged policy → same result) ────────
+        if not body.force_refresh:
+            cached = await memory_orchestrator.get_audit_for_domain(
+                body.domain, policy_hash=fetch.policy_hash
+            )
+            if cached:
+                report, meta = cached
+                print(f"⚡ [Audit/URL] Hash match: {body.domain}")
+                resp_data = _audit_response("persistent_cache:hash_match", report, meta)
+                if is_leader:
+                    await memory_orchestrator.complete_audit_lease(body.domain, result=resp_data)
+                return JSONResponse(content=resp_data, headers=audit_headers)
 
-        # !! Policy text is discarded here — never written to DB or returned !!
-        del clean_text
+        # ── 4. Inference ───────────────────────────────────────────────────────
+        async with _admitted():
+            clean_text = sanitize_input_prompt(fetch.text, is_audit_policy=True)
+            report     = await _run_inference(body.domain, clean_text)
 
-        chat_ctx   = translate_audit_for_prompt(report)
-        await memory_orchestrator.save_audit(
-            body.domain, fetch.policy_hash, report, chat_ctx, fetch.policy_url
-        )
-        return _audit_response("inference", report,
-                               {"policy_url": fetch.policy_url, "cached_at": int(time.time()), "age_days": 0})
+            # !! Policy text is discarded here — never written to DB or returned !!
+            del clean_text
+
+            chat_ctx   = translate_audit_for_prompt(report)
+            await memory_orchestrator.save_audit(
+                body.domain, fetch.policy_hash, report, chat_ctx, fetch.policy_url
+            )
+            resp_data = _audit_response("inference", report,
+                                        {"policy_url": fetch.policy_url, "cached_at": int(time.time()), "age_days": 0})
+            if is_leader:
+                await memory_orchestrator.complete_audit_lease(body.domain, result=resp_data)
+            return JSONResponse(content=resp_data, headers=audit_headers)
+    except Exception as exc:
+        if is_leader:
+            await memory_orchestrator.complete_audit_lease(body.domain, error=exc)
+        raise
 
 
 # ── Audit: by text (legacy — extension pre-extracted) ─────────────────────────
@@ -881,12 +948,18 @@ async def chat(request: Request, body: ChatRequest):
     Chat context read from pre-computed audit_store.chat_context — no JSON
     parsing on this hot path.
     """
-    user_id = f"{request.headers.get('X-Ssense-API-Key','')}:{get_client_ip(request)}"
+    user_header = request.headers.get("X-Ssense-User-Id", "")
+    user_id = f"{request.headers.get('X-Ssense-API-Key','')}:{user_header}" if user_header else f"{request.headers.get('X-Ssense-API-Key','')}:{get_client_ip(request)}"
+
     limited, remaining = await memory_orchestrator.enforce_chat_rate_limit(user_id)
+    daily_limited, daily_rem, daily_reset = await memory_orchestrator.enforce_daily_chat_rate_limit(user_id)
     rate_limit_headers = {
         "X-RateLimit-Limit": "60",
         "X-RateLimit-Remaining": str(max(0, remaining)),
         "X-RateLimit-Window": "60",
+        "X-DailyLimit-Limit": "200",
+        "X-DailyLimit-Remaining": str(max(0, daily_rem)),
+        "X-DailyLimit-Reset": str(daily_reset),
     }
     if limited:
         # Audits are never rate-limited — only chat. Retry-After is a flat
@@ -896,6 +969,12 @@ async def chat(request: Request, body: ChatRequest):
             429,
             "Chat rate limit exceeded (60 req/min). Audit is unlimited.",
             headers={**rate_limit_headers, "Retry-After": "60"},
+        )
+    if daily_limited:
+        raise HTTPException(
+            429,
+            "Daily chat quota exceeded (200 req/day per user). Resets tomorrow. Audit is unlimited.",
+            headers={**rate_limit_headers, "Retry-After": str(daily_reset)},
         )
 
     clean_prompt = sanitize_input_prompt(body.userPrompt, is_audit_policy=False)
@@ -961,11 +1040,15 @@ async def chat(request: Request, body: ChatRequest):
                     else f"Question about {body.domain}: {clean_prompt}"
                 )
 
+                # Multi-turn history injection
+                history_prompt = await multi_user_session_manager.get_history_prompt(user_id, body.domain)
+                history_block = f"\n{history_prompt}" if history_prompt else ""
+
                 prompt = (
                     "<|im_start|>system\nYou are the Ssense DPDP Co-Pilot. "
                     "Ground ALL answers in the retrieved context and audit report.\n"
                     f"RESPONSE LENGTH: {length_instr}\n\n"
-                    f"[AUDIT SUMMARY FOR {body.domain}]\n{chat_context}<|im_end|>\n"
+                    f"[AUDIT SUMMARY FOR {body.domain}]\n{chat_context}<|im_end|>{history_block}\n"
                     f"<|im_start|>user\n{user_content}<|im_end|>\n"
                     "<|im_start|>assistant\n"
                 )
@@ -974,9 +1057,16 @@ async def chat(request: Request, body: ChatRequest):
                 yield f"data: {json.dumps({'event':'citations','data':citations})}\n\n"
 
                 req_id = str(uuid.uuid4())
+                generated_tokens = []
                 async for tok in llm_engine.generate_chat_stream(req_id, prompt, max_tokens=max_tokens):
+                    generated_tokens.append(tok)
                     await broadcaster.emit("token", tok)
                     yield f"data: {json.dumps({'event':'token','data':tok})}\n\n"
+
+                if generated_tokens:
+                    await multi_user_session_manager.record_turn(
+                        user_id, body.domain, clean_prompt, "".join(generated_tokens)
+                    )
             finally:
                 memory_orchestrator.inference_queue.release()
 

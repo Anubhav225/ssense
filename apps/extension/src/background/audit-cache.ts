@@ -1,22 +1,19 @@
 // apps/extension/src/background/audit-cache.ts
 //
-// Local audit result cache using chrome.storage.local.
+// Persistent local audit cache backed by IndexedDB with chrome.storage.local
+// auto-migration and quota resilience.
 //
-// Stores only the structured audit result for each domain — no policy text,
-// no HTML, no raw content.  The server fetches and discards policy text;
-// the extension never sees it.
-//
-// Why chrome.storage.local instead of IndexedDB:
-//   - Simple key-value access, no schema or transaction boilerplate
-//   - Synchronous-feeling async API (single await)
-//   - 10 MB default capacity — more than enough for thousands of audits
-//     (each entry is ~2–4 KB of JSON)
-//   - Survives service-worker restarts automatically
+// Why IndexedDB:
+//   - chrome.storage.local has a strict ~10 MB quota that caps out at 2,500-3,000 domains.
+//   - IndexedDB allows hundreds of MBs, indexed querying on audited_at,
+//     and cursor-based iteration.
+//   - Seamlessly migrates legacy chrome.storage.local entries on first run.
 
 import type { AuditReport } from '../types/server-protocol';
 
 export interface LocalAuditEntry {
-  domain:          string;
+  _v?:             number;   // schema version (1)
+  domain:          string;   // normalized (no www.)
   trust_score:     number;
   subtlety_score:  number;
   violation_count: number;
@@ -26,13 +23,93 @@ export interface LocalAuditEntry {
   audited_at:      number;   // Unix ms
   age_days:        number;
   source:          string;
+  previous_trust_score?: number | null;
+  previous_audited_at?:  number | null;
 }
 
-const KEY_PREFIX = 'audit:';
-const ALL_DOMAINS_KEY = 'audit_domains';  // sorted set of domain names for listing
+const DB_NAME    = 'ssense_audit_cache';
+const DB_VERSION = 1;
+const STORE      = 'audits';
+const SCHEMA_VERSION = 1;
+const LEGACY_DOMAINS_KEY = 'audit_domains';
+const LEGACY_PREFIX = 'audit:';
 
-function domainKey(domain: string): string {
-  return KEY_PREFIX + domain.toLowerCase().replace(/^www\./, '');
+let _dbPromise: Promise<IDBDatabase> | null = null;
+let _migrated = false;
+
+export function normaliseDomain(domain: string): string {
+  return domain.trim().toLowerCase().replace(/^www\./, '');
+}
+
+function openDb(): Promise<IDBDatabase> {
+  if (_dbPromise) return _dbPromise;
+  _dbPromise = new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(STORE)) {
+        const store = db.createObjectStore(STORE, { keyPath: 'domain' });
+        store.createIndex('audited_at', 'audited_at', { unique: false });
+        store.createIndex('trust_score', 'trust_score', { unique: false });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => {
+      _dbPromise = null;
+      reject(req.error);
+    };
+  });
+  return _dbPromise;
+}
+
+async function getDb(): Promise<IDBDatabase> {
+  try {
+    const db = await openDb();
+    if ((db as any).closePending || (db as any)._closed) {
+      _dbPromise = null;
+      return openDb();
+    }
+    return db;
+  } catch {
+    _dbPromise = null;
+    return openDb();
+  }
+}
+
+/** One-time migration from chrome.storage.local to IndexedDB. */
+async function migrateLegacyStorage(): Promise<void> {
+  if (_migrated) return;
+  _migrated = true;
+  try {
+    const data = await chrome.storage.local.get(LEGACY_DOMAINS_KEY);
+    const domains: string[] = data[LEGACY_DOMAINS_KEY];
+    if (!Array.isArray(domains) || domains.length === 0) return;
+
+    const keys = domains.map(d => `${LEGACY_PREFIX}${d}`);
+    const records = await chrome.storage.local.get(keys);
+    const db = await getDb();
+
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      const store = tx.objectStore(STORE);
+      for (const k of keys) {
+        const entry = records[k];
+        if (entry && entry.domain) {
+          entry._v = SCHEMA_VERSION;
+          entry.domain = normaliseDomain(entry.domain);
+          store.put(entry);
+        }
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+
+    // Clean up legacy chrome.storage keys to free quota
+    await chrome.storage.local.remove([...keys, LEGACY_DOMAINS_KEY]);
+    console.log(`[AuditCache] Migrated ${domains.length} cached audits from chrome.storage.local to IndexedDB.`);
+  } catch (err) {
+    console.warn('[AuditCache] Legacy migration check failed (non-fatal):', err);
+  }
 }
 
 // ── Write ─────────────────────────────────────────────────────────────────────
@@ -40,63 +117,94 @@ export async function saveAudit(
   domain: string,
   report: AuditReport,
   meta: { policy_url?: string; source?: string; age_days?: number },
-): Promise<void> {
+): Promise<LocalAuditEntry> {
+  await migrateLegacyStorage();
+  const norm = normaliseDomain(domain);
+  const db   = await getDb();
+
+  // Read prior entry to compute score diff
+  const prior = await getAudit(norm);
+
   const entry: LocalAuditEntry = {
-    domain,
+    _v:              SCHEMA_VERSION,
+    domain:          norm,
     trust_score:     report.dpdp_trust_score,
     subtlety_score:  report.subtlety_score,
     violation_count: report.violations?.length ?? 0,
     violations:      report.violations ?? [],
     global_legal_reasoning: report.global_legal_reasoning ?? '',
-    policy_url:  meta.policy_url ?? '',
-    audited_at:  Date.now(),
-    age_days:    meta.age_days ?? 0,
-    source:      meta.source ?? 'inference',
+    policy_url:      meta.policy_url ?? (prior?.policy_url || ''),
+    audited_at:      Date.now(),
+    age_days:        meta.age_days ?? 0,
+    source:          meta.source ?? 'inference',
+    previous_trust_score: prior ? prior.trust_score : null,
+    previous_audited_at:  prior ? prior.audited_at : null,
   };
-  const normDomain = entry.domain.toLowerCase().replace(/^www\./, '');
 
-  // Maintain the domains index so getAllAudits() can list without scanning keys
-  const { [ALL_DOMAINS_KEY]: existing } = await chrome.storage.local.get(ALL_DOMAINS_KEY);
-  const domains: string[] = existing ?? [];
-  if (!domains.includes(normDomain)) domains.push(normDomain);
-
-  await chrome.storage.local.set({
-    [domainKey(domain)]: entry,
-    [ALL_DOMAINS_KEY]:   domains,
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    const store = tx.objectStore(STORE);
+    store.put(entry);
+    tx.oncomplete = () => resolve(entry);
+    tx.onerror = () => reject(tx.error);
   });
 }
 
 // ── Read one ──────────────────────────────────────────────────────────────────
 export async function getAudit(domain: string): Promise<LocalAuditEntry | null> {
-  const key = domainKey(domain);
-  const result = await chrome.storage.local.get(key);
-  return (result[key] as LocalAuditEntry) ?? null;
+  await migrateLegacyStorage();
+  const norm = normaliseDomain(domain);
+  const db   = await getDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const req = tx.objectStore(STORE).get(norm);
+    req.onsuccess = () => resolve((req.result as LocalAuditEntry) ?? null);
+    req.onerror = () => reject(req.error);
+  });
 }
 
-// ── Read all (for history view) ───────────────────────────────────────────────
+// ── Read all (sorted by audited_at DESC) ───────────────────────────────────────
 export async function getAllAudits(): Promise<LocalAuditEntry[]> {
-  const { [ALL_DOMAINS_KEY]: domains } = await chrome.storage.local.get(ALL_DOMAINS_KEY);
-  if (!domains?.length) return [];
-  const keys    = (domains as string[]).map(d => domainKey(d));
-  const results = await chrome.storage.local.get(keys);
-  return keys
-    .map(k => results[k] as LocalAuditEntry)
-    .filter(Boolean)
-    .sort((a, b) => b.audited_at - a.audited_at);
+  await migrateLegacyStorage();
+  const db = await getDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const index = tx.objectStore(STORE).index('audited_at');
+    const results: LocalAuditEntry[] = [];
+    const req = index.openCursor(null, 'prev'); // newest first
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (cursor) {
+        results.push(cursor.value);
+        cursor.continue();
+      } else {
+        resolve(results);
+      }
+    };
+    req.onerror = () => reject(req.error);
+  });
 }
 
 // ── Remove one ────────────────────────────────────────────────────────────────
 export async function removeAudit(domain: string): Promise<void> {
-  const norm = domain.toLowerCase().replace(/^www\./, '');
-  const { [ALL_DOMAINS_KEY]: domains } = await chrome.storage.local.get(ALL_DOMAINS_KEY);
-  const filtered = ((domains as string[]) ?? []).filter(d => d !== norm);
-  await chrome.storage.local.remove(domainKey(domain));
-  await chrome.storage.local.set({ [ALL_DOMAINS_KEY]: filtered });
+  await migrateLegacyStorage();
+  const norm = normaliseDomain(domain);
+  const db   = await getDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).delete(norm);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
 }
 
 // ── Clear all ─────────────────────────────────────────────────────────────────
 export async function clearAllAudits(): Promise<void> {
-  const { [ALL_DOMAINS_KEY]: domains } = await chrome.storage.local.get(ALL_DOMAINS_KEY);
-  const keys = ((domains as string[]) ?? []).map(d => domainKey(d));
-  await chrome.storage.local.remove([...keys, ALL_DOMAINS_KEY]);
+  const db = await getDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
 }

@@ -133,7 +133,7 @@ const parseMarkdown = (text: string): React.ReactNode[] =>
   });
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
-const ComplianceBadge = ({ score }: { score: number | null }) => {
+const ComplianceBadge = ({ score, delta }: { score: number | null; delta?: number | null }) => {
   if (score === null) return (
     <div className="ssense-badge">
       <div className="ssense-badge-dot" style={{ background: 'var(--ssense-accent-amber)', animation: 'ssense-pulse 1.5s infinite' }} />
@@ -147,6 +147,19 @@ const ComplianceBadge = ({ score }: { score: number | null }) => {
       <div className="ssense-badge-dot" style={{ background: color }} />
       <span style={{ fontSize:11, fontWeight:600, color }}>{score}</span>
       <span style={{ fontSize:11, fontWeight:500, color:'var(--ssense-text-muted)' }}>{label}</span>
+      {typeof delta === 'number' && delta !== 0 && (
+        <span style={{
+          fontSize: 10,
+          fontWeight: 700,
+          color: delta > 0 ? 'var(--ssense-accent-emerald)' : 'var(--ssense-accent-rose)',
+          background: delta > 0 ? 'rgba(16,185,129,0.12)' : 'rgba(244,63,94,0.12)',
+          padding: '1px 5px',
+          borderRadius: 4,
+          marginLeft: 2,
+        }}>
+          {delta > 0 ? `+${delta}` : delta}
+        </span>
+      )}
     </div>
   );
 };
@@ -172,6 +185,7 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
   const [domain, setDomain]               = useState<string | null>(null);
   const [isSystemPage, setIsSystemPage]   = useState(false);
   const [trustScore, setTrustScore]       = useState<number | null>(null);
+  const [scoreDelta, setScoreDelta]       = useState<number | null>(null);
   const [auditReport, setAuditReport]     = useState<AuditReport | null>(null);
   const [auditError, setAuditError]       = useState('');
   const [showAuditDetails, setShowAuditDetails] = useState(false);
@@ -179,21 +193,38 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
   const [showShield, setShowShield]       = useState(false);
   const [messages, setMessages]           = useState<{ role: 'user' | 'ai'; text: string }[]>([]);
   const [input, setInput]                 = useState('');
-  const [isThinking, setIsThinking]       = useState(false);
+  const [isAuditing, setIsAuditing]       = useState(false);
+  const [isChatting, setIsChatting]       = useState(false);
   const [responseMode, setResponseMode]   = useState<'concise' | 'thinking'>('concise');
   const [loadingText, setLoadingText]     = useState('Connecting to Ssense AI...');
   const [serviceAvailable, setServiceAvailable] = useState(true);
   const [serviceError, setServiceError]   = useState('');
   const [siteHistory, setSiteHistory]     = useState<any | null>(null);
   const [shieldSettings, setShieldSettings] = useState({ blockTrackers: true, spoofHardware: true, injectGPC: true });
-  // Chat quota — audits are never rate-limited, only chat, so this state is
-  // scoped entirely to handleSend and never touched by runAudit.
+  const [cacheSource, setCacheSource]     = useState<string>('inference');
+  const [cacheAgeDays, setCacheAgeDays]   = useState<number>(0);
+  const [isOffline, setIsOffline]         = useState(typeof navigator !== 'undefined' ? !navigator.onLine : false);
   const [chatQuota, setChatQuota]         = useState<RateLimitInfo | null>(null);
   const [cooldownUntil, setCooldownUntil] = useState<number | null>(null);
   const [cooldownLeft, setCooldownLeft]   = useState(0);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const currentDomainRef = useRef<string | null>(null);
+
+  // ── Load persisted shield settings ──────────────────────────
+  useEffect(() => {
+    chrome.storage.local.get('ssense_shield_settings').then(d => {
+      if (d.ssense_shield_settings) setShieldSettings(d.ssense_shield_settings);
+    }).catch(() => {});
+  }, []);
+
+  const toggleShield = (key: 'blockTrackers' | 'spoofHardware' | 'injectGPC') => {
+    setShieldSettings(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      chrome.storage.local.set({ ssense_shield_settings: next }).catch(() => {});
+      return next;
+    });
+  };
 
   // ── Export report ──────────────────────────────────────────
   const exportAuditReport = () => {
@@ -219,9 +250,10 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
     URL.revokeObjectURL(url);
   };
 
-  // ── Health check ───────────────────────────────────────────
+  // ── Adaptive Health check (visibility-aware + 2-min backoff) ─
   useEffect(() => {
-    const ping = () =>
+    const ping = () => {
+      if (document.hidden) return; // Skip if tab/panel is hidden
       chrome.runtime.sendMessage({ type: 'HEALTH_CHECK', requestId: crypto.randomUUID() })
         .then(res => {
           const ok = Boolean(res?.success) && res?.modelLoaded !== false;
@@ -229,66 +261,127 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
           setServiceError(ok ? '' : res?.error || 'AI service unavailable. Check Settings.');
         })
         .catch(err => { setServiceAvailable(false); setServiceError(err?.message || 'Cannot reach Ssense server.'); });
+    };
+
     ping();
-    const id = setInterval(ping, 15_000);
-    return () => clearInterval(id);
+    const id = setInterval(ping, 120_000); // 2-min backoff: reduces health traffic by 87%
+
+    const onVis = () => { if (!document.hidden) ping(); };
+    document.addEventListener('visibilitychange', onVis);
+
+    const onOn = () => setIsOffline(false);
+    const onOff = () => setIsOffline(true);
+    window.addEventListener('online', onOn);
+    window.addEventListener('offline', onOff);
+
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('online', onOn);
+      window.removeEventListener('offline', onOff);
+    };
   }, []);
 
-  // ── Tab tracking ───────────────────────────────────────────
+  // ── Tab tracking & History loading on domain switch ────────
   useEffect(() => {
     const handleUrl = async (url: string | undefined) => {
-      if (!url?.startsWith('http')) { setIsSystemPage(true); setDomain(null); currentDomainRef.current = null; setAuditReport(null); setAuditError(''); return; }
+      if (!url?.startsWith('http')) {
+        setIsSystemPage(true); setDomain(null); currentDomainRef.current = null;
+        setAuditReport(null); setAuditError(''); setMessages([]);
+        return;
+      }
       setIsSystemPage(false);
       const newDomain = new URL(url).hostname;
       if (newDomain === currentDomainRef.current) return;
       setDomain(newDomain); currentDomainRef.current = newDomain;
-      setTrustScore(null); setAuditReport(null); setAuditError(''); setShowAuditDetails(false); setMessages([]); setSiteHistory(null);
+      setTrustScore(null); setScoreDelta(null); setAuditReport(null); setAuditError('');
+      setShowAuditDetails(false); setSiteHistory(null);
+
       try {
-        // Load from local audit-cache first — instant, no server round-trip
-        const [localAudit, hist] = await Promise.all([
-          chrome.runtime.sendMessage({ type: 'GET_LOCAL_AUDIT', domain: newDomain }),
+        // Load local audit with SWR metadata, site history, and chat history concurrently
+        const [localAudit, hist, chatHist] = await Promise.all([
+          chrome.runtime.sendMessage({ type: 'GET_LOCAL_AUDIT_WITH_META', domain: newDomain }),
           chrome.runtime.sendMessage({ type: 'GET_SITE_HISTORY', domain: newDomain }),
+          chrome.runtime.sendMessage({ type: 'GET_CHAT_HISTORY', domain: newDomain }),
         ]);
+
         if (localAudit?.success && localAudit.entry) {
           const e = localAudit.entry;
           setTrustScore(e.trust_score);
-          setAuditReport({ dpdp_trust_score: e.trust_score, subtlety_score: e.subtlety_score,
-            violations: e.violations, global_legal_reasoning: e.global_legal_reasoning });
+          setAuditReport({
+            dpdp_trust_score: e.trust_score,
+            subtlety_score: e.subtlety_score,
+            violations: e.violations,
+            global_legal_reasoning: e.global_legal_reasoning,
+          });
+          setCacheSource(localAudit.source || e.source || 'local_cache');
+          setCacheAgeDays(localAudit.ageDays || e.age_days || 0);
           setShowAuditDetails(e.violation_count > 0);
         }
-        if (hist?.success) setSiteHistory(hist.entry || null);
+
+        if (hist?.success && hist.entry) {
+          setSiteHistory(hist.entry);
+          const historyArr = hist.entry.scoreHistory || [];
+          if (historyArr.length >= 2) {
+            const last = historyArr[historyArr.length - 1];
+            const prev = historyArr[historyArr.length - 2];
+            setScoreDelta(last.score - prev.score);
+          }
+        }
+
+        if (chatHist?.success && Array.isArray(chatHist.messages)) {
+          setMessages(chatHist.messages.map((m: any) => ({ role: m.role, text: m.text })));
+        } else {
+          setMessages([]);
+        }
       } catch { /* non-fatal */ }
     };
 
     chrome.tabs.query({ active: true, currentWindow: true }, tabs => handleUrl(tabs[0]?.url));
-    const onUpdate = (_: number, ci: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => { if (tab.active && (ci.status === 'complete' || ci.url)) handleUrl(tab.url); };
+    const onUpdate = (_: number, ci: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => {
+      if (tab.active && (ci.status === 'complete' || ci.url)) handleUrl(tab.url);
+    };
     const onActivate = async (info: chrome.tabs.TabActiveInfo) => handleUrl((await chrome.tabs.get(info.tabId)).url);
     const onMsg = (msg: any) => {
       if (msg.type === 'AUDIT_COMPLETE' && msg.domain === currentDomainRef.current) {
         setTrustScore(msg.score); setAuditError(''); setServiceAvailable(true); setServiceError('');
-        setIsThinking(false);
+        setIsAuditing(false);
+        if (msg.previousScore != null) {
+          setScoreDelta(msg.score - msg.previousScore);
+        }
+        if (msg.source) setCacheSource(msg.source);
         if (msg.report) { setAuditReport(msg.report); setShowAuditDetails(msg.report.violations.length > 0); }
-        chrome.runtime.sendMessage({ type: 'GET_SITE_HISTORY', domain: msg.domain }).then(r => { if (r?.success) setSiteHistory(r.entry || null); }).catch(() => {});
+        chrome.runtime.sendMessage({ type: 'GET_SITE_HISTORY', domain: msg.domain })
+          .then(r => { if (r?.success) setSiteHistory(r.entry || null); }).catch(() => {});
       }
       if (msg.type === 'AUDIT_ERROR' && msg.domain === currentDomainRef.current) {
-        setAuditError(msg.error || 'Audit could not be completed.'); setServiceAvailable(false); setServiceError(msg.error || 'Audit failed.');
+        setAuditError(msg.error || 'Audit could not be completed.');
+        setIsAuditing(false);
       }
     };
     chrome.tabs.onUpdated.addListener(onUpdate);
     chrome.tabs.onActivated.addListener(onActivate);
     chrome.runtime.onMessage.addListener(onMsg);
-    return () => { chrome.tabs.onUpdated.removeListener(onUpdate); chrome.tabs.onActivated.removeListener(onActivate); chrome.runtime.onMessage.removeListener(onMsg); };
+    return () => {
+      chrome.tabs.onUpdated.removeListener(onUpdate);
+      chrome.tabs.onActivated.removeListener(onActivate);
+      chrome.runtime.onMessage.removeListener(onMsg);
+    };
   }, []);
 
-  useLayoutEffect(() => { if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight; }, [messages, isThinking]);
+  useLayoutEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, isChatting]);
 
   useEffect(() => {
-    if (!isThinking) return;
-    const stages = ['Connecting to Ssense AI...', 'Retrieving context...', 'Reasoning over DPDP Act...', 'Generating response...'];
+    if (!isAuditing && !isChatting) return;
+    const stages = isAuditing
+      ? ['Scanning page DOM...', 'Checking DPDP compliance cache...', 'Forensic legal analysis...', 'Finalizing report...']
+      : ['Connecting to Ssense AI...', 'Retrieving context...', 'Reasoning over DPDP Act...', 'Generating response...'];
     let i = 0; setLoadingText(stages[0]);
-    const id = setInterval(() => { i = (i+1) % stages.length; setLoadingText(stages[i]); }, 3500);
+    const id = setInterval(() => { i = (i+1) % stages.length; setLoadingText(stages[i]); }, 3000);
     return () => clearInterval(id);
-  }, [isThinking]);
+  }, [isAuditing, isChatting]);
 
   // ── Cooldown countdown (chat rate limit only — audits are unaffected) ──
   useEffect(() => {
@@ -305,58 +398,100 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
 
   // ── Manual audit: re-inject extractor → finds URL → server does everything ─
   const runAudit = useCallback(async (forceRefresh = false) => {
-    if (!domain || isThinking) return;
-    setIsThinking(true); setAuditError('');
+    if (!domain || isAuditing) return;
+    setIsAuditing(true); setAuditError('');
     try {
-      // Load cached result immediately (instant) then trigger fresh check
       if (!forceRefresh) {
-        const local = await chrome.runtime.sendMessage({ type: 'GET_LOCAL_AUDIT', domain });
+        const local = await chrome.runtime.sendMessage({ type: 'GET_LOCAL_AUDIT_WITH_META', domain });
         if (local?.success && local.entry) {
           setTrustScore(local.entry.trust_score);
-          setAuditReport({ dpdp_trust_score: local.entry.trust_score, subtlety_score: local.entry.subtlety_score,
-            violations: local.entry.violations, global_legal_reasoning: local.entry.global_legal_reasoning });
+          setAuditReport({
+            dpdp_trust_score: local.entry.trust_score,
+            subtlety_score: local.entry.subtlety_score,
+            violations: local.entry.violations,
+            global_legal_reasoning: local.entry.global_legal_reasoning,
+          });
+          setCacheSource(local.source || 'local_cache');
+          setCacheAgeDays(local.ageDays || 0);
           setShowAuditDetails(local.entry.violation_count > 0);
-          setIsThinking(false);
+          setIsAuditing(false);
           return;
         }
       }
-      // Re-inject extractor → FOUND_POLICY_URL → service-worker → server
       const retry = await chrome.runtime.sendMessage({ type: 'RETRY_EXTRACTION' });
       if (!retry?.success) throw new Error(retry?.error || 'Could not scan this page for a privacy policy link.');
-      // Result arrives asynchronously via AUDIT_COMPLETE / AUDIT_ERROR broadcast
     } catch (err: any) {
-      setAuditError(err.message || 'Audit failed.'); setServiceAvailable(false);
-      setIsThinking(false);
+      setAuditError(err.message || 'Audit failed.');
+      setIsAuditing(false);
     }
-  }, [domain, isThinking]);
+  }, [domain, isAuditing]);
 
-  // ── Chat ───────────────────────────────────────────────────
+  // ── Chat (Streaming relay via port with fallback) ───────────
   const handleSend = useCallback(async (text?: string) => {
     const prompt = text || input;
-    if (!prompt.trim() || isThinking || !domain || isSystemPage || !serviceAvailable || cooldownLeft > 0) return;
+    if (!prompt.trim() || isChatting || !domain || isSystemPage || !serviceAvailable || cooldownLeft > 0 || isOffline) return;
+
     setMessages(prev => [...prev, { role: 'user', text: prompt }]);
-    setInput(''); setIsThinking(true);
+    setInput('');
+    setIsChatting(true);
+
     try {
-      const res = await chrome.runtime.sendMessage({ type: 'CHAT', domain, userPrompt: prompt, responseMode });
-      if (res?.rateLimit) setChatQuota(res.rateLimit);
-      if (res?.success) {
-        setMessages(prev => [...prev, { role: 'ai', text: res.message }]);
-      } else {
-        const isRateLimited = res?.errorKind === 'server' && /rate limit/i.test(res?.error || '');
-        if (isRateLimited) {
-          // Chat-only cooldown — audits remain fully available during this
-          // window, which is why the banner explicitly says so rather than
-          // implying the whole assistant is unavailable.
-          setCooldownUntil(Date.now() + (res.rateLimit?.windowSeconds ?? 60) * 1000);
+      const port = chrome.runtime.connect({ name: 'ssense-chat-stream' });
+      let accumulatedAiText = '';
+      let messageAppended = false;
+
+      port.onMessage.addListener((streamMsg) => {
+        if (streamMsg.type === 'CHUNK') {
+          accumulatedAiText += streamMsg.delta || '';
+          setMessages(prev => {
+            if (!messageAppended) {
+              messageAppended = true;
+              return [...prev, { role: 'ai', text: accumulatedAiText }];
+            }
+            const updated = [...prev];
+            updated[updated.length - 1] = { role: 'ai', text: accumulatedAiText };
+            return updated;
+          });
+        } else if (streamMsg.type === 'DONE') {
+          if (streamMsg.rateLimit) setChatQuota(streamMsg.rateLimit);
+          setIsChatting(false);
+          port.disconnect();
+        } else if (streamMsg.type === 'ERROR') {
+          const isRateLimited = streamMsg.errorKind === 'server' && /rate limit/i.test(streamMsg.error || '');
+          if (isRateLimited) {
+            setCooldownUntil(Date.now() + (streamMsg.rateLimit?.windowSeconds ?? 60) * 1000);
+          } else {
+            setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${streamMsg.error || 'Request failed.'}` }]);
+          }
+          setIsChatting(false);
+          port.disconnect();
+        }
+      });
+
+      port.postMessage({
+        type: 'START_CHAT',
+        domain,
+        userPrompt: prompt,
+        responseMode,
+        requestId: crypto.randomUUID(),
+      });
+    } catch {
+      // Fallback to standard message passing
+      try {
+        const res = await chrome.runtime.sendMessage({ type: 'CHAT', domain, userPrompt: prompt, responseMode });
+        if (res?.rateLimit) setChatQuota(res.rateLimit);
+        if (res?.success) {
+          setMessages(prev => [...prev, { role: 'ai', text: res.message }]);
         } else {
           setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${res?.error || 'Request failed.'}` }]);
         }
+      } catch (err: any) {
+        setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${err?.message || 'Could not reach Ssense AI.'}` }]);
+      } finally {
+        setIsChatting(false);
       }
-    } catch (err: any) {
-      setMessages(prev => [...prev, { role: 'ai', text: `⚠️ ${err?.message || 'Could not reach Ssense AI.'}` }]);
-      setServiceAvailable(false); setServiceError(err?.message || 'Connection error.');
-    } finally { setIsThinking(false); }
-  }, [input, isThinking, domain, isSystemPage, serviceAvailable, responseMode, cooldownLeft]);
+    }
+  }, [input, isChatting, domain, isSystemPage, serviceAvailable, responseMode, cooldownLeft, isOffline]);
 
   const quickPrompts = domain
     ? [`Is ${domain} selling my data?`, 'Where is my data stored?', 'Explain the data retention policy.']
@@ -387,7 +522,7 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
             </div>
             <div className="ssense-header-info">
               <div className="ssense-domain">{isSystemPage ? 'System Page' : (domain || 'Detecting…')}</div>
-              {!isSystemPage && <ComplianceBadge score={trustScore} />}
+              {!isSystemPage && <ComplianceBadge score={trustScore} delta={scoreDelta} />}
             </div>
           </div>
         </div>
@@ -422,9 +557,9 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
           <button
             className="ssense-toolbar-btn"
             onClick={() => runAudit(true)}
-            disabled={!domain || isThinking || isSystemPage}
+            disabled={!domain || isAuditing || isSystemPage}
             title="Run a fresh audit of this site's privacy policy — audits are never rate-limited"
-          ><span>{isThinking ? '⏳' : '📋'}</span><span>{isThinking ? 'Auditing…' : 'Audit'}</span></button>
+          ><span>{isAuditing ? '⏳' : '📋'}</span><span>{isAuditing ? 'Auditing…' : 'Audit'}</span></button>
           <button
             className={`ssense-toolbar-btn${showShield ? ' ssense-toolbar-btn--active' : ''}`}
             onClick={() => setShowShield(v => !v)}
@@ -457,7 +592,7 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
           ] as const).map(([key, label]) => (
             <label key={key} className="ssense-shield-row">
               <span>{label}</span>
-              <input type="checkbox" checked={shieldSettings[key]} onChange={e => setShieldSettings(s => ({ ...s, [key]: e.target.checked }))} />
+              <input type="checkbox" checked={shieldSettings[key]} onChange={() => toggleShield(key)} />
             </label>
           ))}
         </div>
@@ -468,7 +603,7 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
         <div style={{ margin:'10px 20px 0', padding:'10px 12px', borderRadius:9, border:'1px solid rgba(245,158,11,.25)', background:'rgba(245,158,11,.07)', color:'var(--ssense-accent-amber)', fontSize:10.5, lineHeight:1.5 }}>
           <strong>Audit unavailable.</strong> {auditError}
           <div style={{ marginTop:6, display:'flex', gap:8 }}>
-            <button onClick={() => runAudit(false)} disabled={isThinking} style={{ border:'1px solid rgba(245,158,11,.3)', background:'transparent', color:'var(--ssense-accent-amber)', borderRadius:6, padding:'4px 8px', fontSize:10, cursor:'pointer' }}>Retry</button>
+            <button onClick={() => runAudit(false)} disabled={isAuditing} style={{ border:'1px solid rgba(245,158,11,.3)', background:'transparent', color:'var(--ssense-accent-amber)', borderRadius:6, padding:'4px 8px', fontSize:10, cursor:'pointer' }}>Retry</button>
             <button onClick={() => chrome.runtime.sendMessage({ type: 'RETRY_EXTRACTION' })} style={{ border:'1px solid rgba(245,158,11,.2)', background:'transparent', color:'var(--ssense-text-muted)', borderRadius:6, padding:'4px 8px', fontSize:10, cursor:'pointer' }}>Re-scan page</button>
           </div>
         </div>
@@ -486,6 +621,18 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
 
           {showAuditDetails && (
             <div className="ssense-audit-body">
+              {/* Cache & Offline metadata badges */}
+              {cacheSource === 'offline_cache' && (
+                <div style={{ fontSize:10, color:'var(--ssense-accent-amber)', padding:'4px 8px', background:'rgba(245,158,11,0.08)', borderRadius:6, border:'1px solid rgba(245,158,11,0.2)' }}>
+                  📶 Offline Mode — Displaying cached audit ({cacheAgeDays}d old)
+                </div>
+              )}
+              {cacheSource === 'persistent_cache' && cacheAgeDays > 0 && (
+                <div style={{ fontSize:10, color:'var(--ssense-text-muted)', padding:'2px 4px' }}>
+                  From cache · {cacheAgeDays} day{cacheAgeDays !== 1 ? 's' : ''} ago
+                </div>
+              )}
+
               {/* Score row */}
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', background:'rgba(255,255,255,0.03)', padding:8, borderRadius:6, border:'1px solid rgba(255,255,255,0.05)' }}>
                 <div><div style={{ fontSize:10, color:'var(--ssense-text-muted)' }}>Trust Score</div><div style={{ fontSize:14, fontWeight:700, color:'var(--ssense-accent-cyan)' }}>{auditReport.dpdp_trust_score} / 100</div></div>
@@ -548,7 +695,7 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
         {isSystemPage
           ? <div className="ssense-empty-state" style={{ marginTop:'30%', color:'var(--ssense-text-muted)' }}>Ssense AI is disabled on browser system pages.</div>
           : <>
-              {messages.length === 0 && !isThinking && domain && (
+              {messages.length === 0 && !isChatting && domain && (
                 <div className="ssense-empty-state">
                   <h2 className="ssense-gradient-text" style={{ fontSize:22, fontWeight:700, margin:0, letterSpacing:'-0.02em' }}>Ssense Co-Pilot</h2>
                   <p style={{ color:'var(--ssense-text-secondary)', fontSize:13, marginTop:8, lineHeight:1.5 }}>Ask anything about this site's data practices.</p>
@@ -558,7 +705,7 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
                 </div>
               )}
               {messages.map((msg, i) => <MessageBubble key={i} msg={msg} />)}
-              {isThinking && (
+              {isChatting && (
                 <div className="ssense-animate-in" style={{ display:'flex', alignItems:'center', gap:10, paddingLeft:4 }}>
                   <div className="ssense-thinking-dot" />
                   <div className="ssense-thinking-dot" style={{ animationDelay:'0.2s' }} />
@@ -578,11 +725,11 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleSend()}
-            placeholder={isSystemPage ? 'Disabled on system pages' : cooldownLeft > 0 ? `Chat resumes in ${cooldownLeft}s…` : 'Ask about this site\'s privacy practices…'}
+            placeholder={isSystemPage ? 'Disabled on system pages' : isOffline ? 'Chat requires an internet connection' : cooldownLeft > 0 ? `Chat resumes in ${cooldownLeft}s…` : 'Ask about this site\'s privacy practices…'}
             className="ssense-input-field"
-            disabled={isThinking || !domain || isSystemPage || !serviceAvailable || cooldownLeft > 0}
+            disabled={isChatting || !domain || isSystemPage || !serviceAvailable || cooldownLeft > 0 || isOffline}
           />
-          <button onClick={() => handleSend()} disabled={!input.trim() || isThinking || !domain || isSystemPage || !serviceAvailable || cooldownLeft > 0} className={`ssense-send-btn${input.trim() && !isThinking && cooldownLeft === 0 ? ' active' : ''}`}>
+          <button onClick={() => handleSend()} disabled={!input.trim() || isChatting || !domain || isSystemPage || !serviceAvailable || cooldownLeft > 0 || isOffline} className={`ssense-send-btn${input.trim() && !isChatting && cooldownLeft === 0 && !isOffline ? ' active' : ''}`}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
           </button>
         </div>

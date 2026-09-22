@@ -11,6 +11,12 @@ const DB_NAME = 'ssense_history';
 const DB_VERSION = 1;
 const STORE = 'site_visits';
 
+export interface ScoreHistoryPoint {
+  timestamp: number;
+  score:     number;
+  delta?:    number;
+}
+
 export interface SiteHistoryEntry {
   domain: string;
   firstVisit: number;       // epoch ms
@@ -20,6 +26,7 @@ export interface SiteHistoryEntry {
   lastScore: number | null;
   lastReport: DpdpAuditReport | null;
   lastAuditAt: number | null;
+  scoreHistory?: ScoreHistoryPoint[];
 }
 
 let _dbPromise: Promise<IDBDatabase> | null = null;
@@ -119,10 +126,24 @@ export async function recordAudit(domain: string, report: DpdpAuditReport): Prom
     lastScore: null,
     lastReport: null,
     lastAuditAt: null,
+    scoreHistory: [],
   };
-  base.lastScore = report.dpdp_trust_score;
+
+  const newScore = report.dpdp_trust_score;
+  const prevScore = base.lastScore;
+  const delta = prevScore !== null ? newScore - prevScore : 0;
+
+  const history = base.scoreHistory || [];
+  history.push({ timestamp: now, score: newScore, delta });
+  // Keep the most recent 30 audit points for sparkline rendering
+  if (history.length > 30) {
+    history.splice(0, history.length - 30);
+  }
+
+  base.lastScore = newScore;
   base.lastReport = report;
   base.lastAuditAt = now;
+  base.scoreHistory = history;
   await putEntry(base);
 }
 

@@ -48,6 +48,28 @@ function auditFreshness(lastAuditAt: number | null): { label: string; stale: boo
   return { label: `Valid for ${daysLeft}d`, stale: false };
 }
 
+const Sparkline = ({ points }: { points?: { score: number }[] }) => {
+  if (!points || points.length < 2) return null;
+  const scores = points.map(p => p.score);
+  const min = Math.min(...scores, 0);
+  const max = Math.max(...scores, 100);
+  const range = max - min || 1;
+  const w = 50, h = 16;
+  const coords = scores.map((s, i) => {
+    const x = (i / (scores.length - 1)) * w;
+    const y = h - ((s - min) / range) * (h - 4) - 2;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const lastScore = scores[scores.length - 1];
+  const strokeColor = lastScore >= 80 ? '#10B981' : lastScore >= 50 ? '#F59E0B' : '#F43F5E';
+  return (
+    <svg width={w} height={h} style={{ overflow: 'visible', verticalAlign: 'middle' }}>
+      <title>Score trend</title>
+      <polyline fill="none" stroke={strokeColor} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" points={coords} />
+    </svg>
+  );
+};
+
 export const HistoryView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [entries, setEntries] = useState<SiteHistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -70,6 +92,32 @@ export const HistoryView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     if (!confirm('Clear all browsing and audit history? This cannot be undone.')) return;
     await chrome.runtime.sendMessage({ type: 'CLEAR_HISTORY' });
     await loadHistory();
+  };
+
+  const handleExportAll = () => {
+    if (!entries.length) return;
+    const rows = [
+      ['Domain', 'Visits', 'Total Time (ms)', 'Trust Score', 'Violations', 'First Visit', 'Last Visit', 'Last Audit'],
+      ...entries.map(e => [
+        `"${e.domain}"`,
+        e.visitCount,
+        e.totalTimeMs,
+        e.lastScore ?? 'N/A',
+        e.lastReport?.violations.length ?? 0,
+        `"${new Date(e.firstVisit).toISOString()}"`,
+        `"${new Date(e.lastVisit).toISOString()}"`,
+        e.lastAuditAt ? `"${new Date(e.lastAuditAt).toISOString()}"` : 'N/A',
+      ]),
+    ];
+    const csvContent = rows.map(r => r.join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement('a'), {
+      href: url,
+      download: `ssense_audit_history_${new Date().toISOString().split('T')[0]}.csv`,
+    });
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const visible = useMemo(() => {
@@ -104,12 +152,22 @@ export const HistoryView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
               <div style={{ fontSize: 11, color: 'var(--ssense-text-muted)' }}>{entries.length} sites tracked</div>
             </div>
           </div>
-          <button
-            onClick={handleClear}
-            style={{ background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.2)', color: 'var(--ssense-accent-rose)', fontSize: 10.5, fontWeight: 600, padding: '4px 8px', borderRadius: 6, cursor: 'pointer', flexShrink: 0 }}
-          >
-            Clear All
-          </button>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              onClick={handleExportAll}
+              disabled={entries.length === 0}
+              style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid var(--ssense-border)', color: 'var(--ssense-text-primary)', fontSize: 10.5, fontWeight: 500, padding: '4px 8px', borderRadius: 6, cursor: 'pointer', flexShrink: 0 }}
+              title="Export compliance log as CSV"
+            >
+              Export CSV
+            </button>
+            <button
+              onClick={handleClear}
+              style={{ background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.2)', color: 'var(--ssense-accent-rose)', fontSize: 10.5, fontWeight: 600, padding: '4px 8px', borderRadius: 6, cursor: 'pointer', flexShrink: 0 }}
+            >
+              Clear
+            </button>
+          </div>
         </div>
       </header>
 
@@ -173,13 +231,16 @@ export const HistoryView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                     {formatRelativeTime(entry.lastVisit)} · {entry.visitCount} visit{entry.visitCount === 1 ? '' : 's'} · {formatDuration(entry.totalTimeMs)}
                   </div>
                 </div>
-                <div
-                  style={{
-                    fontSize: 13, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace",
-                    color: scoreColor(entry.lastScore), flexShrink: 0,
-                  }}
-                >
-                  {entry.lastScore !== null ? entry.lastScore : '—'}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                  <Sparkline points={entry.scoreHistory} />
+                  <div
+                    style={{
+                      fontSize: 13, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace",
+                      color: scoreColor(entry.lastScore),
+                    }}
+                  >
+                    {entry.lastScore !== null ? entry.lastScore : '—'}
+                  </div>
                 </div>
               </div>
 
