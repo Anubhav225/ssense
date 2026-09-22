@@ -112,6 +112,9 @@ apps/slm-server/data/*
 *.log
 docker_logs*.txt
 powershell.bat
+.patch-round*/
+*.zip
+
 
 # ------------------------------------------------------------------------------
 # Operating System & IDE Artifacts

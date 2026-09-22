@@ -229,8 +229,23 @@ async def verify_hmac_signature_chat(request: Request) -> bool:
 # ═══════════════════════════════════════════════════════════════
 # 2. HEURISTIC ML SECURITY SHIELD (Injection & Exfiltration Guard)
 # ═══════════════════════════════════════════════════════════════
-MAX_POLICY_CHARS = 32000
-MAX_PROMPT_CHARS = 1024
+# SOTA FIX: MAX_POLICY_CHARS was a hard, silent truncation applied BEFORE
+# chunking ever ran (see main.py::sanitize_input_prompt call site) — any
+# policy longer than this was cut at 32,000 chars (~5,000 words) with
+# everything past that point simply never seen by the model, no matter how
+# many chunks the audit pipeline could otherwise evaluate. Many real
+# corporate privacy policies (GDPR-era, multi-jurisdiction) run 6,000-12,000+
+# words, so this was quietly capping audit coverage well before the chunking
+# layer's own per-request chunk-count cap (main.py::_audit_max_chunks_for_profile)
+# ever got a chance to matter. Raised to 64,000 chars (~10,000-11,000 words)
+# — generous enough to cover the large majority of real-world policies in
+# full — and made env-tunable since "how long is too long" is a
+# cost/abuse-prevention tradeoff, not a fixed constant. This still bounds
+# worst-case cost/abuse; genuinely pathological input is bounded further
+# upstream by policy_fetcher.py's MAX_RESPONSE_BYTES (8MB of raw HTML) and,
+# for the legacy text-upload endpoint, by this cap directly.
+MAX_POLICY_CHARS = int(os.getenv("SSENSE_MAX_POLICY_CHARS", "64000"))
+MAX_PROMPT_CHARS = int(os.getenv("SSENSE_MAX_PROMPT_CHARS", "1024"))
 
 DISTILLATION_KEYWORDS = [
     r"dump\s+chain\s+of\s+thought", r"output\s+training\s+format",

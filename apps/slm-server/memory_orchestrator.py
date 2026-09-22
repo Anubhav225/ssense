@@ -220,7 +220,7 @@ class InferenceQueue:
         finally:
             async with self._admit_lock:
                 self._waiting -= 1
-        self._in_flight += 1
+                self._in_flight += 1
 
     def release(self) -> None:
         self._in_flight = max(0, self._in_flight - 1)

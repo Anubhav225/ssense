@@ -33,13 +33,37 @@ x-slm-common: &slm-common
     # away from $HOME, and doubly so since the process runs as non-root 'ssense' (home=/app,
     # not /root) via docker-entrypoint.sh.
     - ~/.cache/huggingface:/app/.cache/huggingface
-    # BUG FIX: the audit-result SQLite cache (audit_store.py, default path
-    # /app/data/ssense_audit_cache.db) had NO volume at all - it lived only
-    # in the container's writable layer, so every `docker compose down` /
-    # `--force-recreate` / image rebuild silently wiped 90 days of cached
-    # audits, and there was no host-side file to back up or copy when
-    # migrating to a new server. Named volume below fixes both.
-    - audit-data:/app/data:rw
+    # BUG FIX + PORTABILITY: the audit-result SQLite cache (audit_store.py,
+    # default path /app/data/ssense_audit_cache.db) had NO volume at all - it
+    # lived only in the container's writable layer, so every
+    # `docker compose down` / `--force-recreate` / image rebuild silently
+    # wiped 90 days of cached audits.
+    #
+    # This is a HOST BIND MOUNT (./data/db on the compose file's own host
+    # directory), not a Docker named volume, deliberately: a named volume is
+    # stored under Docker's internal /var/lib/docker/volumes/<hash>/_data and
+    # can only be moved with `docker volume` commands or a helper container.
+    # A bind mount is just a folder on disk — to shift this server to a new
+    # instance while keeping the DB "local" and portable:
+    #   1. docker compose stop slm-server-<profile>   (flush the WAL cleanly)
+    #   2. rsync -a ./data/db/ newhost:/path/to/slm-server/data/db/
+    #   3. start the container on the new host — it opens the same file, no
+    #      docker volume export/import, no daemon involved.
+    # See scripts/migrate_db.sh for a scripted version of this, and
+    # scripts/backup_db.sh for a live (non-downtime) WAL-safe backup you can
+    # run on a schedule without stopping the server.
+    - ./data/db:/app/data:rw
+    # OPTIONAL, opt-in: a second, independent mount point for db_sync.py's
+    # automatic export/import (see db_sync.py's module docstring). Point
+    # the host side at network-backed storage (NFS, an s3fs/rclone FUSE
+    # mount, a cloud block volume, or just a folder synced elsewhere by
+    # other means) and every instance sharing that same path will:
+    # (a) auto-import the shared cache on first boot if its own local DB
+    # is empty, and (b) periodically export its own local DB there on a
+    # timer. Leave this commented out (and SSENSE_DB_EXPORT_PATH unset
+    # below) to disable the whole subsystem — it's a strict no-op without
+    # it. Uncomment both to enable:
+    # - ./data/db-export:/app/data-export:rw
   healthcheck: &slm-common-healthcheck
     test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
     interval: 10s
@@ -120,6 +144,48 @@ services:
       - VLLM_TARGET_DEVICE=cuda
       - VLLM_WORKER_MULTIPROCESS_METHOD=spawn
       - RAY_DISABLE_MEMORY_MONITOR=1
+      # KV-cache overflow buffer in host RAM (GiB) — see engine.py::_build_gpu_args.
+      - SSENSE_VLLM_SWAP_SPACE_GB=${SSENSE_VLLM_SWAP_SPACE_GB:-4}
+      # Hard concurrency ceiling passed to vLLM's own scheduler. Keep this
+      # equal to SSENSE_MAX_CONCURRENT_INFERENCE above — vLLM won't batch
+      # more sequences than this, and the admission queue won't admit more
+      # than SSENSE_MAX_CONCURRENT_INFERENCE, so mismatching them either
+      # starves the GPU (queue admits fewer than vLLM could run) or defeats
+      # the queue's own backpressure (vLLM caps lower than the queue expects).
+      - SSENSE_VLLM_MAX_NUM_SEQS=${SSENSE_VLLM_MAX_NUM_SEQS:-256}
+      # vLLM 0.27 auto-selects an attention backend (FlashAttention-2/3 via
+      # the vllm-openai base image) based on detected GPU generation, and
+      # that default is correct for most single-GPU deployments — leave this
+      # unset unless you've benchmarked an alternative for your specific
+      # card. On Hopper/Blackwell datacenter cards specifically, FlashInfer
+      # is worth A/B testing against the default at 10k+-connection scale:
+      # its paged-KV decode kernels are typically faster than FlashAttention
+      # for the many-short-sequences decode pattern this workload produces
+      # (lots of concurrent single-token decode steps, as opposed to a few
+      # long prefills) — uncomment below only after confirming both the
+      # flashinfer wheel is installed in the image and a benchmark on your
+      # actual traffic shape shows a win; it is not a safe blind default.
+      # - VLLM_ATTENTION_BACKEND=FLASHINFER
+      # Automatic DB export/import/sync (db_sync.py) — no-op unless set.
+      # Requires the ./data/db-export mount above to also be uncommented.
+      # - SSENSE_DB_EXPORT_PATH=/app/data-export
+      # - SSENSE_DB_SYNC_INTERVAL_SECONDS=900
+      # - SSENSE_DB_EXPORT_RETAIN=5
+      # RAG embedder/reranker device placement (rag_engine.py) — auto-selected
+      # by default based on real memory headroom after vLLM's own budget (see
+      # AsyncHybridRAG._select_device's docstring); uncomment SSENSE_RAG_DEVICE
+      # only to force cpu/cuda regardless of that estimate.
+      # - SSENSE_RAG_DEVICE=cuda
+      # - SSENSE_RAG_MIN_HEADROOM_GB=8.0
+      # Caps how many chunk-level audit generations can be in flight across
+      # ALL audit requests at once (main.py::_get_audit_chunk_semaphore) —
+      # keeps a burst of long-policy audits from crowding out chat's share
+      # of vLLM's max_num_seqs batch slots. Default 32 on GPU/jetson, 8 on
+      # cpu (see main.py). Also: how many sections one audit will evaluate
+      # before falling back to keyword-density prioritization (main.py::
+      # _audit_max_chunks_for_profile) — default 20 GPU / 6 CPU.
+      # - SSENSE_AUDIT_MAX_CONCURRENT_CHUNKS=32
+      # - SSENSE_AUDIT_MAX_CHUNKS_GPU=20
     deploy:
       # Modern Docker GPU Passthrough (replaces deprecated 'runtime: nvidia')
       resources:
@@ -166,6 +232,27 @@ services:
       - VLLM_TARGET_DEVICE=cuda
       - VLLM_WORKER_MULTIPROCESS_METHOD=spawn
       - RAY_DISABLE_MEMORY_MONITOR=1
+      # Automatic DB export/import/sync (db_sync.py) — see the gpu profile
+      # above for the full explanation. No-op unless set.
+      # - SSENSE_DB_EXPORT_PATH=/app/data-export
+      # - SSENSE_DB_SYNC_INTERVAL_SECONDS=900
+      # - SSENSE_DB_EXPORT_RETAIN=5
+      # RAG embedder/reranker device placement — auto-selected based on real
+      # unified-memory headroom after vLLM's budget (see
+      # AsyncHybridRAG._select_device's docstring). This is exactly the
+      # setting that matters most on this profile: a tightly-capped ~32GB
+      # Jetson auto-selects CPU, while a large-unified-memory board like an
+      # AGX Spark-class device (much more headroom above vLLM's
+      # SSENSE_TARGET_MEMORY_GB budget) auto-selects GPU — same image, same
+      # compose file, correct behavior on both without editing anything
+      # below unless you want to force one or the other.
+      # - SSENSE_RAG_DEVICE=cuda
+      # - SSENSE_RAG_MIN_HEADROOM_GB=8.0
+      # Audit chunk concurrency bound + coverage cap — see the gpu profile
+      # above. Jetson's much smaller max_num_seqs (16, engine.py) means this
+      # matters even more here: leave real headroom for chat.
+      # - SSENSE_AUDIT_MAX_CONCURRENT_CHUNKS=8
+      # - SSENSE_AUDIT_MAX_CHUNKS_GPU=12
     # Jetson exposes its GPU via the NVIDIA Container Runtime configured at
     # the Docker daemon level (nvidia-docker / nvidia-ctk on L4T), not the
     # same device-reservation syntax as a discrete-GPU host. Ensure the host
@@ -213,6 +300,11 @@ services:
       - VLLM_CPU_KVCACHE_SPACE=${VLLM_CPU_KVCACHE_SPACE:-2}
       - SSENSE_TARGET_MEMORY_GB=${SSENSE_TARGET_MEMORY_GB:-32.0}
       - VLLM_USE_V1=0
+      # Automatic DB export/import/sync (db_sync.py) — see the gpu profile
+      # above for the full explanation. No-op unless set.
+      # - SSENSE_DB_EXPORT_PATH=/app/data-export
+      # - SSENSE_DB_SYNC_INTERVAL_SECONDS=900
+      # - SSENSE_DB_EXPORT_RETAIN=5
 
   nginx-cpu:
     <<: *nginx-common
@@ -226,5 +318,8 @@ services:
         condition: service_healthy
 
 volumes:
+  # Redis is a rate-limit/nonce cache only (see redis_limiter.py) — safe to
+  # lose, so it stays a normal named volume. The SQLite audit cache is the
+  # data that actually needs to be portable/backed-up, so it's a bind mount
+  # (./data/db, declared above) instead of a named volume here.
   redis-data:
-  audit-data:

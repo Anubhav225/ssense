@@ -1,15 +1,16 @@
 {
+  "_comment": "REFERENCE ONLY — not loaded by any code path (engine.py builds AsyncEngineArgs directly; grep the repo, nothing imports this file). Kept as a human-readable summary of the live GPU-profile settings and MUST be updated by hand whenever engine.py::_build_gpu_args changes, or it will drift out of sync again the way it previously did (this copy used to say max_num_seqs=64 / gpu_memory_utilization=0.80 while the real code shipped 256 / dynamic-utilization — pure documentation debt, not a live bug, but confusing to anyone who read this file instead of the code).",
   "description": "Optimized SOTA vLLM Multi-LoRA Profile for NVIDIA DGX (Grace-Blackwell / Ada / Ampere)",
   "model": "Qwen/Qwen2.5-7B-Instruct",
   "dtype": "bfloat16",
   "tensor_parallel_size": 1,
-  "gpu_memory_utilization": 0.80,
+  "gpu_memory_utilization": "dynamic — TARGET_TOTAL_MEMORY_GB (default 32) / real detected VRAM, or 0.90 on cards smaller than the target; see engine.py::_build_gpu_args",
   "max_model_len": 8192,
-  "max_num_seqs": 64,
-  "swap_space": 4,
+  "max_num_seqs": "256 by default, env-tunable via SSENSE_VLLM_MAX_NUM_SEQS",
+  "swap_space_gb": "4 by default, env-tunable via SSENSE_VLLM_SWAP_SPACE_GB",
+  "kv_cache_dtype": "fp8 on Hopper/Ada/Blackwell (real capability probe, not a hardcoded flag), auto (bf16) elsewhere",
   "enable_chunked_prefill": true,
   "enable_prefix_caching": true,
-  "prefix_caching_hash_algorithm": "murmur3",
   "enable_lora": true,
   "max_loras": 2,
   "max_lora_rank": 128,
@@ -18,6 +19,5 @@
     "audit_lora=/app/ml/models/audit-model-final-adapter",
     "chatbot_lora=/app/ml/models/chatbot-model-final-adapter"
   ],
-  "disable_log_stats": false,
   "port": 8000
 }

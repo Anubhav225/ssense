@@ -22,6 +22,7 @@ Architecture changes in this version:
   - Chat endpoint:   rate-limited (60 req/min per api_key+IP).
 """
 
+import asyncio
 import json
 import os
 import re
@@ -47,10 +48,11 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from pydantic import BaseModel, Field
 from slowapi.errors import RateLimitExceeded
 
+import db_sync
 from audit_store import audit_store
 from engine import ProductionAsyncEngine, detect_hardware_capabilities
 from memory_orchestrator import memory_orchestrator, QueueSaturatedError
-from policy_fetcher import fetch_policy, FetchResult
+from policy_fetcher import fetch_policy, FetchResult, close_shared_clients as close_policy_fetch_clients
 from rag_engine import rag_engine
 from security import (
     _rate_limit_exceeded_handler,
@@ -141,6 +143,14 @@ async def lifespan(app: FastAPI):
     global llm_engine
     print("🚀 Booting Ssense SLM Server v6 (server-side extraction)...")
 
+    # Auto-import BEFORE audit_store opens the local DB file: if this is a
+    # freshly-provisioned instance (empty ./data/db) and a prior export
+    # exists at SSENSE_DB_EXPORT_PATH, the shared cache is pulled in here so
+    # the server starts warm instead of cold. No-op if export isn't
+    # configured, or if this instance already has its own local data — see
+    # db_sync.py's docstring for the full safety rules.
+    db_sync.import_if_new(audit_store._db_path)
+
     await memory_orchestrator.verify_rate_limiter_backend()
     await audit_store.initialize()
     base_dir, audit_dir, chat_dir = ensure_models_exist()
@@ -152,10 +162,21 @@ async def lifespan(app: FastAPI):
         chatbot_adapter_path=str(chat_dir),
         compute_profile=COMPUTE_PROFILE,
     )
+
+    # Background periodic export → SSENSE_DB_EXPORT_PATH (no-op if unset).
+    sync_task = asyncio.create_task(db_sync.periodic_export_task(audit_store._db_path))
+
     print("✅ Ssense SLM Server ready.")
     yield
     print("🛑 Shutting down...")
+    sync_task.cancel()
+    try:
+        await sync_task
+    except asyncio.CancelledError:
+        pass
+    await db_sync.final_export(audit_store._db_path)
     await audit_store.close()
+    await close_policy_fetch_clients()
 
 
 app = FastAPI(
@@ -212,21 +233,114 @@ _DPDP_KEYWORD_PATTERNS = {
 }
 
 
-def chunk_policy_text(text: str, max_chunk_chars: int = 3200) -> list[str]:
-    """Splits policy text into coherent paragraph-aware segments of at most max_chunk_chars."""
+# Common abbreviations that a naive "split after . ! ?" regex mistakes for
+# sentence ends (privacy policies are full of these: "U.S.", "Inc.", "e.g.",
+# "Dept.", statute references like "Sec. 8", etc). Used by
+# _split_into_sentences' merge-back pass below.
+_SENTENCE_ABBREVIATIONS = {
+    "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "vs", "etc", "eg", "ie",
+    "inc", "ltd", "co", "corp", "us", "uk", "eu", "no", "vol", "fig",
+    "approx", "dept", "est", "art", "sec", "para", "cl", "govt", "assn",
+    "gov", "rev", "std", "reg", "eqn",
+}
+
+
+def _split_into_sentences(text: str) -> list[str]:
+    """Regex sentence splitter with an abbreviation-aware merge-back pass.
+
+    A plain `re.split(r'(?<=[.!?])\\s+', text)` treats "the U.S. Department"
+    as two sentences ("...the U.S." / "Department..."), which is exactly
+    the kind of false sentence-boundary that made the old chunker's
+    "sentence-safe" packing less reliable than it looked — every character
+    was preserved somewhere, but semantically-connected clauses could still
+    land in different chunks. Python regex lookbehind must be fixed-width,
+    so a known-abbreviation set can't be built into the split pattern
+    directly; instead this splits naively first, then walks the pieces and
+    merges a split back together when the preceding fragment ends in a
+    known abbreviation, a single-letter initial ("J. Smith"), or a decimal
+    number ("3.5 million") — the standard trick for abbreviation-aware
+    sentence splitting without a full NLP dependency.
+    """
+    if not text:
+        return []
+    raw_parts = re.split(r'(?<=[.!?])\s+', text.strip())
+    if len(raw_parts) <= 1:
+        return [p for p in raw_parts if p]
+
+    sentences: list[str] = []
+    buf = raw_parts[0]
+    for part in raw_parts[1:]:
+        prev = buf.rstrip()
+        # Matches trailing tokens with internal periods too ("U.S", "e.g"),
+        # not just a single final word — a plain `[A-Za-z]+\.$` only ever
+        # captures the LAST letter run ("S." out of "U.S."), which missed
+        # exactly the multi-period abbreviations ("U.S.", "e.g.") most
+        # likely to cause a false sentence break in policy text.
+        word_match = re.search(r'((?:[A-Za-z]\.)*[A-Za-z]+)\.$', prev)
+        is_known_abbrev = False
+        if word_match:
+            token = word_match.group(1).replace(".", "").lower()
+            is_known_abbrev = token in _SENTENCE_ABBREVIATIONS
+        is_single_letter_initial = bool(re.search(r'(?:^|\s)[A-Z]\.$', prev))
+        is_decimal_number = bool(re.search(r'\d\.$', prev)) and bool(re.match(r'^\d', part))
+        if is_known_abbrev or is_single_letter_initial or is_decimal_number:
+            buf = f"{buf} {part}"
+        else:
+            sentences.append(buf)
+            buf = part
+    sentences.append(buf)
+    return sentences
+
+
+def chunk_policy_text(
+    text: str,
+    max_chunk_chars: int = 3200,
+    overlap_sentences: int = 2,
+) -> list[str]:
+    """Splits policy text into coherent, sentence-safe segments of at most
+    ~max_chunk_chars, with a small trailing-sentence overlap carried into
+    the start of the next chunk for cross-boundary context.
+
+    Two-level strategy:
+      1. Split on blank-line paragraph boundaries first (`\\n\\s*\\n`) — the
+         common case for well-formatted policy text, and it keeps whole
+         paragraphs together where possible, which reads more naturally to
+         the model than arbitrary sentence-level joins.
+      2. Any paragraph that's STILL over max_chunk_chars on its own (a
+         single giant run-on paragraph, or — very common for scraped-from-
+         HTML policy text — a document with no blank lines separating
+         sections at all, which makes step 1 return one giant "paragraph"
+         covering the whole document) is subdivided at SENTENCE boundaries
+         via `_split_into_sentences`, never mid-sentence and never mid-word.
+
+    Final chunks are then packed by greedily filling up to max_chunk_chars
+    from these paragraph/sentence-level units — packing only ever ends a
+    chunk exactly between two such units, so no unit (and therefore no
+    sentence) is ever split across the max_chunk_chars boundary either.
+
+    `overlap_sentences` (default 2): after chunks are built, the last N
+    sentences of chunk i are prepended to chunk i+1, clearly labeled as
+    carried-over context. This directly targets the "properly recombined to
+    receive the complete context" requirement — without it, a violation
+    whose full meaning depends on the sentence immediately before a chunk
+    boundary (e.g. "...as described above. This data is retained
+    indefinitely.") can read as ambiguous or lose its antecedent when a
+    chunk is evaluated in isolation. Set to 0 to disable.
+    """
     if not text:
         return []
     paragraphs = [p.strip() for p in re.split(r'\n\s*\n', text) if p.strip()]
     if not paragraphs:
         paragraphs = [p.strip() for p in text.splitlines() if p.strip()]
 
-    # If any individual paragraph exceeds max_chunk_chars, subdivide it
+    # If any individual paragraph exceeds max_chunk_chars, subdivide it at
+    # SENTENCE boundaries (never mid-sentence, never mid-word).
     normalized_paragraphs: list[str] = []
     for p in paragraphs:
         if len(p) <= max_chunk_chars:
             normalized_paragraphs.append(p)
         else:
-            sub_parts = re.split(r'(?<=[.!?])\s+', p)
+            sub_parts = _split_into_sentences(p)
             buf: list[str] = []
             buf_len = 0
             for part in sub_parts:
@@ -240,7 +354,7 @@ def chunk_policy_text(text: str, max_chunk_chars: int = 3200) -> list[str]:
             if buf:
                 normalized_paragraphs.append(" ".join(buf))
 
-    chunks = []
+    chunks: list[str] = []
     current: list[str] = []
     current_len = 0
     for p in normalized_paragraphs:
@@ -254,11 +368,50 @@ def chunk_policy_text(text: str, max_chunk_chars: int = 3200) -> list[str]:
             current_len += p_len + 2
     if current:
         chunks.append("\n\n".join(current))
-    return chunks
+
+    if overlap_sentences <= 0 or len(chunks) <= 1:
+        return chunks
+
+    overlapped = [chunks[0]]
+    for i in range(1, len(chunks)):
+        prev_sentences = _split_into_sentences(chunks[i - 1])
+        tail = " ".join(prev_sentences[-overlap_sentences:]).strip()
+        if tail:
+            overlapped.append(
+                f"[...continued from previous section, for context: \"{tail}\"]\n\n{chunks[i]}"
+            )
+        else:
+            overlapped.append(chunks[i])
+    return overlapped
+
+
+def _audit_max_chunks_for_profile() -> int:
+    """Safety/cost CEILING on how many sections a single audit will evaluate
+    — NOT a routine truncation. Previously this was a hardcoded 2 (CPU) / 4
+    (GPU) and silently dropped every section beyond it with no warning; a
+    ~3200-char chunk size means any policy over ~6,400 chars (CPU) or
+    ~12,800 chars (GPU) — well within normal length for a real corporate
+    privacy policy — had sections the model never saw, so a violation
+    stated only in a skipped section was simply never found. Raised to
+    generous per-profile defaults so the common case is full coverage (see
+    _run_inference: chunks at or under this cap are evaluated in full,
+    ALL of them, in original document order — this cap only bites, and
+    only then falls back to keyword-density prioritization, for genuinely
+    unusual document lengths). Still env-tunable per deployment since "how
+    much to spend evaluating one very long policy" is a real cost/latency
+    tradeoff, especially on the CPU profile.
+    """
+    if COMPUTE_PROFILE == "cpu":
+        return int(os.getenv("SSENSE_AUDIT_MAX_CHUNKS_CPU", "6"))
+    return int(os.getenv("SSENSE_AUDIT_MAX_CHUNKS_GPU", "20"))
 
 
 def select_operative_chunks(chunks: list[str], max_chunks: int = 2) -> list[tuple[int, str]]:
-    """Scores chunks by statutory legal clause density and selects top operative windows."""
+    """Prioritizes chunks by statutory legal clause density — used ONLY as a
+    fallback when a policy's chunk count exceeds _audit_max_chunks_for_profile()
+    (see that function's docstring). In the normal case (chunks within the
+    cap), callers should evaluate every chunk directly rather than calling
+    this at all, so no section is ever skipped without it being logged."""
     if len(chunks) <= max_chunks:
         return list(enumerate(chunks))
 
@@ -281,8 +434,15 @@ def select_operative_chunks(chunks: list[str], max_chunks: int = 2) -> list[tupl
 
 
 def recombine_audit_reports(chunk_reports: list[Dict[str, Any]], domain: str) -> Dict[str, Any]:
-    """Fuses multi-chunk forensic audit outputs into a single deduplicated,
-    statistically calibrated DPDP audit report."""
+    """Deterministically (no LLM call) fuses the violations from N flagged
+    chunk reports into one deduplicated, congregated DPDP audit report.
+
+    Called by _run_inference only on the subset of chunks that were already
+    flagged (score < 100 and/or non-empty violations) — clean chunks are
+    filtered out before this function ever sees them, so `chunk_reports`
+    here should essentially never be empty and its "no violations survived
+    dedup" branch below is a defensive edge case, not the expected path.
+    """
     all_violations = []
     reasonings = []
 
@@ -319,7 +479,13 @@ def recombine_audit_reports(chunk_reports: list[Dict[str, Any]], domain: str) ->
     }
 
     if not unique_violations:
-        dpdp_trust_score = 95
+        # Edge case only: every input here was pre-flagged by _run_inference,
+        # so ending up with zero violations after dedup means the flagged
+        # chunks' violations were all omission_check entries filtered out
+        # above. 100 matches the model's own convention for a clean result
+        # (see tests/test_server_security.py) rather than an arbitrary
+        # different number for this path.
+        dpdp_trust_score = 100
         subtlety_score = 0
         global_reasoning = (
             f"Comprehensive multi-section forensic audit of {domain} under the DPDP Act 2023 "
@@ -348,7 +514,18 @@ def recombine_audit_reports(chunk_reports: list[Dict[str, Any]], domain: str) ->
 
 
 def _build_audit_prompt(domain: str, clean_text: str) -> str:
-    policy_slice = clean_text[:3200].strip()
+    # BUG FIX: this used to blindly re-slice to [:3200] regardless of what
+    # was passed in. `clean_text` here is always ONE chunk already produced
+    # by chunk_policy_text() — sentence-safe and bounded to ~max_chunk_chars
+    # plus a small overlap allowance (see that function's docstring) — so
+    # re-slicing at a flat 3200 was at best redundant and at worst actively
+    # harmful: it silently cut off the overlap context chunk_policy_text had
+    # just carefully added, and did so with a blind character slice, which
+    # could land mid-sentence even though the chunker itself never would.
+    # What remains is a generous backstop (well above max_chunk_chars +
+    # overlap) that should essentially never trigger in normal operation —
+    # a true last-resort safety net, not a routine truncation step.
+    policy_slice = clean_text[:4500].strip()
     sys_msg = (
         "You are an expert DPDP Act 2023 forensic legal auditor. "
         "Analyze the provided corporate privacy policy for statutory violations under the "
@@ -394,31 +571,156 @@ def _audit_response(source: str, report: Dict[str, Any], meta: Optional[Dict] = 
     }
 
 
+# ── Audit-chunk concurrency bound (separate from InferenceQueue) ───────────
+# _run_inference can fan ONE admitted audit request out to up to
+# _audit_max_chunks_for_profile() (default 20 on GPU) concurrent
+# generate_audit() calls via asyncio.gather. The InferenceQueue
+# (memory_orchestrator.py) only counts REQUESTS, not the individual vLLM
+# sequences a request produces internally — so N concurrently-admitted audit
+# requests, each fanning out to ~20 chunks, could ask vLLM's scheduler for
+# up to N*20 sequences at once. vLLM won't crash (its own scheduler just
+# queues what doesn't fit in max_num_seqs), but that burst competes for the
+# same batch slots as chat's decode steps, which IS a latency risk for the
+# 10k+-concurrent-chat surface this server also has to serve well. This
+# semaphore caps the TOTAL number of audit chunk-generations in flight
+# across ALL audit requests globally, independent of how many requests the
+# InferenceQueue has admitted — leaving the rest of vLLM's max_num_seqs
+# budget free for chat. Sized conservatively relative to max_num_seqs (256
+# default on GPU) so chat is never starved by an audit burst; raise only if
+# you've confirmed audit throughput is the bottleneck for your traffic, not
+# chat latency.
+_audit_chunk_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def _get_audit_chunk_semaphore() -> asyncio.Semaphore:
+    global _audit_chunk_semaphore
+    if _audit_chunk_semaphore is None:
+        default_limit = "8" if COMPUTE_PROFILE == "cpu" else "32"
+        limit = int(os.getenv("SSENSE_AUDIT_MAX_CONCURRENT_CHUNKS", default_limit))
+        _audit_chunk_semaphore = asyncio.Semaphore(limit)
+    return _audit_chunk_semaphore
+
+
 async def _run_inference(domain: str, clean_text: str) -> Dict[str, Any]:
-    """Run the audit LLM across operative policy chunks and recombine into a cohesive report."""
-    chunks = chunk_policy_text(clean_text, max_chunk_chars=3200)
-    max_eval_chunks = 2 if COMPUTE_PROFILE == "cpu" else 4
-    selected = select_operative_chunks(chunks, max_chunks=max_eval_chunks)
+    """Run the audit model across policy chunks and combine into one report.
 
-    print(f"📊 [Audit/Pipeline] Divided {len(clean_text)} chars into {len(chunks)} chunks; evaluating top {len(selected)} operative chunk(s)...")
+    Design (matches how the audit LoRA was actually fine-tuned — one policy
+    chunk in, one probabilistic score + chain-of-thought out — rather than
+    asking it to perform a task shape it never saw in training):
 
-    chunk_reports = []
-    for chunk_idx, chunk_text in selected:
+      1. Split the policy into sentence-safe, appropriately-sized chunks
+         (chunk_policy_text — unchanged from the previous round: no sentence
+         cut in half, small cross-boundary overlap for context).
+      2. Run EVERY chunk within the coverage cap through the model
+         INDEPENDENTLY and concurrently — each chunk gets its own isolated
+         score + reasoning, exactly the input/output shape the model was
+         trained on. No chunk's output is shown to the model as input to
+         another call.
+      3. Discard every chunk that came back clean (dpdp_trust_score == 100,
+         no violations) — a clean chunk contributes nothing to the final
+         report and including its boilerplate "no issues found" reasoning
+         would only dilute the reasoning of the chunks that actually found
+         something.
+      4. If NO chunk found anything, the policy is clean — return that
+         directly, no further processing.
+      5. If any chunk scored below 100, deterministically (in Python, NOT
+         via another LLM call) merge the violations from every such chunk
+         into one congregated violations list, dedup, and recompute a
+         combined trust score from the full merged violation set.
+
+    Why no second LLM "consolidation" pass: the audit LoRA adapter was
+    fine-tuned specifically for (policy text) -> (score, CoT) — a
+    single-chunk, single-pass task. Feeding it a synthetic prompt built from
+    its own prior JSON outputs ("here are N sections' findings, reconcile
+    them") is a task shape it never saw in training. Greedy decoding
+    (temperature=0.0, already the default in engine.py) makes THAT specific
+    generation deterministic, but deterministic-and-out-of-distribution is
+    still unreliable — it just fails the same way every time instead of
+    randomly. A second generative pass was tried in an earlier iteration of
+    this pipeline and is deliberately removed: merging is now pure,
+    auditable Python logic over model outputs the model actually knows how
+    to produce, which also means one less LLM call (and one less unit of
+    GPU contention against chat) per multi-chunk audit.
+    """
+    chunks = chunk_policy_text(clean_text, max_chunk_chars=3200, overlap_sentences=2)
+    max_eval_chunks = _audit_max_chunks_for_profile()
+
+    if len(chunks) > max_eval_chunks:
+        print(f"⚠️  [Audit/Pipeline] {domain}: policy split into {len(chunks)} sections, "
+              f"exceeding the {max_eval_chunks}-section cap for the '{COMPUTE_PROFILE}' profile. "
+              f"Evaluating the {max_eval_chunks} highest statutory-keyword-density sections; "
+              f"{len(chunks) - max_eval_chunks} section(s) will NOT be evaluated this pass. "
+              f"Raise SSENSE_AUDIT_MAX_CHUNKS_{'CPU' if COMPUTE_PROFILE == 'cpu' else 'GPU'} "
+              f"for full coverage of unusually long policies.")
+        selected = select_operative_chunks(chunks, max_chunks=max_eval_chunks)
+    else:
+        # Common case: full coverage, every section, in original document
+        # order — this is what makes the pipeline behave like "the model
+        # going through the whole document", not a sampled subset of it.
+        selected = list(enumerate(chunks))
+
+    print(f"📊 [Audit/Pipeline] {domain}: {len(clean_text)} chars → {len(chunks)} section(s); evaluating {len(selected)} of them ({'full coverage' if len(selected) == len(chunks) else 'capped'})...")
+
+    semaphore = _get_audit_chunk_semaphore()
+
+    async def _run_one(chunk_text: str) -> Dict[str, Any]:
         prompt = _build_audit_prompt(domain, chunk_text)
         req_id = str(uuid.uuid4())
-        raw = await llm_engine.generate_audit(
-            request_id=req_id, prompt=prompt, schema=get_dpdp_schema(), max_tokens=1024
-        )
+        async with semaphore:
+            raw = await llm_engine.generate_audit(
+                request_id=req_id, prompt=prompt, schema=get_dpdp_schema(), max_tokens=1024
+            )
         trimmed = raw.strip()
         if not trimmed.startswith("{"):
             trimmed = "{\n" + trimmed
-        validated = validate_and_repair_report(trimmed)
-        chunk_reports.append(validated)
+        return validate_and_repair_report(trimmed)
+
+    # Every chunk runs independently and concurrently (bounded by the
+    # semaphore above so it can't crowd out chat). vLLM's own continuous
+    # batching handles the actual scheduling once admitted.
+    # return_exceptions=True: a single chunk error doesn't cancel the other
+    # N-1 in-flight vLLM requests (default False would do that).
+    raw_results = await asyncio.gather(*[_run_one(text) for _, text in selected], return_exceptions=True)
+    chunk_reports = [r for r in raw_results if isinstance(r, dict)]
+    chunk_errors  = [r for r in raw_results if isinstance(r, Exception)]
+    if chunk_errors:
+        print(f"⚠️  [Audit/Pipeline] {domain}: {len(chunk_errors)} chunk(s) errored during generation "
+              f"(continuing with {len(chunk_reports)} successful result(s)): {chunk_errors[:2]}")
 
     if len(chunk_reports) == 1:
         return chunk_reports[0]
 
-    return recombine_audit_reports(chunk_reports, domain)
+    # Keep only chunks that found something — "good portions are removed".
+    # A chunk counts as flagged if its score is below a clean 100 OR it
+    # listed any violation directly; checking both is a defensive
+    # cross-check in case the two fields are ever inconsistent in a given
+    # generation (they should always agree by construction of the schema,
+    # but the merge logic shouldn't silently trust that without checking).
+    flagged_reports = [
+        r for r in chunk_reports
+        if r.get("dpdp_trust_score", 100) < 100 or r.get("violations")
+    ]
+
+    print(f"📊 [Audit/Pipeline] {domain}: {len(flagged_reports)}/{len(chunk_reports)} "
+          f"section(s) flagged (score < 100 and/or violations found); "
+          f"{'congregating their violations' if flagged_reports else 'policy is clean across all evaluated sections'}.")
+
+    if not flagged_reports:
+        return {
+            "global_legal_reasoning": (
+                f"Comprehensive multi-section forensic audit of {domain} under the DPDP Act 2023 "
+                "and DPDP Rules 2025 revealed no active statutory contradictions in any of the "
+                f"{len(chunk_reports)} operative policy sections evaluated."
+            ),
+            "violations": [],
+            "dpdp_trust_score": 100,
+            "subtlety_score": 0,
+        }
+
+    # Deterministic congregation of violations from ONLY the flagged
+    # sections — pure Python, no further model call. See
+    # recombine_audit_reports() for the dedup + severity-scoring logic.
+    return recombine_audit_reports(flagged_reports, domain)
 
 
 @asynccontextmanager

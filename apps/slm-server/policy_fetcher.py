@@ -517,6 +517,54 @@ def _is_tls_error(exc: BaseException) -> bool:
     return False
 
 
+# ─── Shared, pooled HTTP clients (PERF FIX) ────────────────────────────────
+# _fetch_with_redirects used to open `async with httpx.AsyncClient(...)` —
+# i.e. a brand-new connection pool, and a fresh TCP+TLS handshake, for every
+# single policy fetch. That's a genuine latency cost (TLS handshake alone is
+# typically 50-300ms depending on the target's distance/CDN) paid on every
+# fetch, including ones the fetch-result cache (`_fetch_cache_get`/`_put`
+# below) will absorb the *next* identical request for but not the first one,
+# and including any burst of first-time audits against different pages on
+# the SAME domain (a fresh pool per call means no TCP/TLS reuse even across
+# those). httpx.AsyncClient already keys its internal connection pool per
+# (scheme, host, port), so ONE shared client safely handles many different
+# target domains — reusing it just means repeat hits to the same host get a
+# warm connection instead of a fresh handshake, with no cross-domain
+# behavior change. Kept as two separate clients (verify=True vs. verify=False)
+# because httpx.AsyncClient's TLS verification is set at client-construction
+# time, and callers need both modes (an initial attempt with real cert
+# verification, and a documented, explicit fallback path for self-signed/
+# misconfigured target sites — see _do_fetch below).
+_shared_clients: Dict[bool, httpx.AsyncClient] = {}
+_shared_clients_lock = asyncio.Lock()
+
+
+async def _get_shared_client(verify: bool) -> httpx.AsyncClient:
+    if verify not in _shared_clients:
+        async with _shared_clients_lock:
+            if verify not in _shared_clients:  # re-check inside the lock
+                _shared_clients[verify] = httpx.AsyncClient(
+                    timeout=httpx.Timeout(FETCH_TIMEOUT_S),
+                    verify=verify,
+                    http2=False,  # HTTP/1.1 avoids JA4 HTTP/2 frame fingerprinting on Cloudflare WAFs
+                    limits=httpx.Limits(
+                        max_connections=200,
+                        max_keepalive_connections=50,
+                        keepalive_expiry=30.0,
+                    ),
+                )
+    return _shared_clients[verify]
+
+
+async def close_shared_clients() -> None:
+    """Call once at app shutdown so pooled connections are closed cleanly
+    instead of left for the OS/GC to clean up."""
+    async with _shared_clients_lock:
+        for client in _shared_clients.values():
+            await client.aclose()
+        _shared_clients.clear()
+
+
 async def _fetch_with_redirects(url: str, verify: bool) -> Tuple[httpx.Response, bytes, str]:
     """Issue the request, following redirects manually (up to MAX_REDIRECTS)
     so the SSRF guard can be re-applied to every hop's target — not just the
@@ -538,45 +586,45 @@ async def _fetch_with_redirects(url: str, verify: bool) -> Tuple[httpx.Response,
         **_REQUEST_HEADERS,
         "Referer": f"{parts.scheme}://{parts.netloc}/",
     }
-    async with httpx.AsyncClient(
-        headers=fetch_headers,
-        timeout=httpx.Timeout(FETCH_TIMEOUT_S),
-        verify=verify,
-        http2=False,  # HTTP/1.1 avoids JA4 HTTP/2 frame fingerprinting on Cloudflare WAFs
-    ) as client:
-        for _hop in range(MAX_REDIRECTS + 1):
-            try:
-                request = client.build_request("GET", current_url)
-                resp = await client.send(request, follow_redirects=False, stream=True)
-            except httpx.ConnectError as exc:
-                if verify and _is_tls_error(exc):
-                    raise _TlsVerificationFailed() from exc
-                raise
+    client = await _get_shared_client(verify)
+    for _hop in range(MAX_REDIRECTS + 1):
+        try:
+            request = client.build_request("GET", current_url, headers=fetch_headers)
+            resp = await client.send(request, follow_redirects=False, stream=True)
+        except httpx.ConnectError as exc:
+            if verify and _is_tls_error(exc):
+                raise _TlsVerificationFailed() from exc
+            raise
 
-            if resp.is_redirect:
-                next_url = resp.headers.get("location")
-                await resp.aclose()
-                if not next_url:
-                    raise RuntimeError(f"Redirect from {current_url} had no Location header.")
-                # Resolve relative redirects against the current URL.
-                next_url = str(httpx.URL(current_url).join(next_url))
-                hop_err = _validate_fetch_url(next_url)
-                if hop_err:
-                    raise _FetchRefused(next_url, f"redirect target — {hop_err}")
-                current_url = next_url
-                continue
-
-            # Stream the body ourselves so we can abort as soon as the size
-            # cap is exceeded, instead of only checking it once everything
-            # has already been buffered into memory.
-            body = bytearray()
-            async for chunk in resp.aiter_bytes():
-                body.extend(chunk)
-                if len(body) > MAX_RESPONSE_BYTES:
-                    await resp.aclose()
-                    raise RuntimeError(f"Response exceeded {MAX_RESPONSE_BYTES}-byte cap; aborted mid-download.")
+        if resp.is_redirect:
+            next_url = resp.headers.get("location")
             await resp.aclose()
-            return resp, bytes(body), str(resp.url)
+            if not next_url:
+                raise RuntimeError(f"Redirect from {current_url} had no Location header.")
+            # Resolve relative redirects against the current URL.
+            next_url = str(httpx.URL(current_url).join(next_url))
+            hop_err = _validate_fetch_url(next_url)
+            if hop_err:
+                raise _FetchRefused(next_url, f"redirect target — {hop_err}")
+            # Referer must track the CURRENT hop, not the original URL, or a
+            # multi-hop redirect chain sends every subsequent request with a
+            # stale Referer pointing at the very first URL in the chain.
+            parts = urlsplit(next_url)
+            fetch_headers = {**fetch_headers, "Referer": f"{parts.scheme}://{parts.netloc}/"}
+            current_url = next_url
+            continue
+
+        # Stream the body ourselves so we can abort as soon as the size
+        # cap is exceeded, instead of only checking it once everything
+        # has already been buffered into memory.
+        body = bytearray()
+        async for chunk in resp.aiter_bytes():
+            body.extend(chunk)
+            if len(body) > MAX_RESPONSE_BYTES:
+                await resp.aclose()
+                raise RuntimeError(f"Response exceeded {MAX_RESPONSE_BYTES}-byte cap; aborted mid-download.")
+        await resp.aclose()
+        return resp, bytes(body), str(resp.url)
 
     raise RuntimeError(f"Too many redirects (> {MAX_REDIRECTS}) starting from {url}.")
 

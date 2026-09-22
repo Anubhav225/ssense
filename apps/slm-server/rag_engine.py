@@ -67,6 +67,83 @@ class LRUEmbeddingCache:
 # 2. ZERO-HOP HYBRID RAG ENGINE
 # ═══════════════════════════════════════════════════════════════
 class AsyncHybridRAG:
+    @staticmethod
+    def _select_device() -> str:
+        """Headroom-aware GPU/CPU placement for the RAG embedder + reranker.
+
+        Deployment targets for this server are: a CPU-only server (no
+        decision to make — CUDA isn't even available), and Jetson-class
+        unified-memory boards ranging from a tightly-capped ~32GB Orin up to
+        a much larger unified-memory box like an AGX Spark-class device
+        (up to ~128GB shared between CPU and GPU). Those two ends of the
+        Jetson range have very different amounts of memory headroom left
+        over after vLLM claims its budget, so a single static default
+        (always CPU, or always GPU) is wrong for one end or the other:
+          - Always-CPU leaves real latency on the table on a high-memory
+            unified box, where the GPU's Tensor Cores are sitting mostly
+            idle relative to vLLM's own budget and a few hundred MB for the
+            embedder/reranker genuinely would not be missed.
+          - Always-GPU risks the boot-order VRAM problem on a tightly-capped
+            board: RAGEngine.initialize() runs BEFORE the vLLM engine boots
+            (see main.py's lifespan), and engine.py's own utilization math
+            assumes it gets to claim its whole configured budget — if these
+            models grab CUDA memory first on a board with little headroom,
+            vLLM's already-computed fraction can exceed what's actually
+            still free.
+
+        So: estimate how much of the unified/VRAM pool vLLM is going to
+        claim (mirroring engine.py's own logic, conservatively — see below),
+        and only place RAG on the GPU if genuine headroom remains after
+        that. This makes an AGX Spark-class box (huge unified pool, vLLM
+        self-capped at TARGET_TOTAL_MEMORY_GB) auto-select GPU, and a
+        tightly-capped ~32GB Jetson auto-select CPU — the same code path
+        handling both ends of the same product line correctly, with no
+        manual per-board tuning required.
+
+        SSENSE_RAG_DEVICE=cpu|cuda always overrides this entirely, for
+        anyone who wants to force one or the other regardless of the
+        estimate (e.g. after benchmarking your specific traffic shape).
+        """
+        requested = os.getenv("SSENSE_RAG_DEVICE", "").strip().lower()
+        if requested in ("cpu", "cuda"):
+            if requested == "cuda" and not torch.cuda.is_available():
+                print("⚠️ [RAGEngine] SSENSE_RAG_DEVICE=cuda requested but no CUDA device is available; using CPU.")
+                return "cpu"
+            print(f"ℹ️ [RAGEngine] SSENSE_RAG_DEVICE explicitly set to '{requested}' — honoring override.")
+            return requested
+
+        if not torch.cuda.is_available():
+            return "cpu"  # CPU-only server profile — nothing else to decide.
+
+        try:
+            total_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+            target_mem_gb = float(os.getenv("SSENSE_TARGET_MEMORY_GB", "32.0"))
+            # Conservative upper-bound estimate of what vLLM will claim — a
+            # safe overestimate for BOTH engine.py code paths (the discrete/
+            # gpu profile claims min(target, total)*~0.9-ish of the card;
+            # the jetson profile claims min(target, total*0.6), which is
+            # always <= this estimate) so this headroom check errs toward
+            # "assume less room than there really is" rather than the
+            # reverse.
+            assumed_engine_claim_gb = min(target_mem_gb, total_mem_gb * 0.9)
+            headroom_gb = total_mem_gb - assumed_engine_claim_gb
+            min_headroom_gb = float(os.getenv("SSENSE_RAG_MIN_HEADROOM_GB", "8.0"))
+
+            if headroom_gb >= min_headroom_gb:
+                print(f"ℹ️ [RAGEngine] {total_mem_gb:.0f}GB unified/VRAM pool, vLLM budgeted to claim "
+                      f"~{assumed_engine_claim_gb:.0f}GB → ~{headroom_gb:.0f}GB headroom "
+                      f"(≥{min_headroom_gb:.0f}GB threshold) — placing RAG models on GPU.")
+                return "cuda"
+            print(f"ℹ️ [RAGEngine] {total_mem_gb:.0f}GB unified/VRAM pool, vLLM budgeted to claim "
+                  f"~{assumed_engine_claim_gb:.0f}GB → only ~{headroom_gb:.0f}GB headroom "
+                  f"(<{min_headroom_gb:.0f}GB threshold) — placing RAG models on CPU to protect "
+                  f"vLLM's memory budget. Override with SSENSE_RAG_DEVICE=cuda if you've verified "
+                  f"this is safe for your deployment.")
+            return "cpu"
+        except Exception as e:
+            print(f"⚠️ [RAGEngine] Could not probe GPU memory for device auto-selection ({e}); defaulting to CPU (safe).")
+            return "cpu"
+
     def __init__(self, use_reranker: bool = True):
         self.index_json_path = MODELS_DIR / "rag-index" / "dpdp_index.json"
         if not self.index_json_path.exists():
@@ -93,9 +170,10 @@ class AsyncHybridRAG:
         # calls while leaving CPU preprocessing (BM25, tokenise, RRF) parallel.
         self._gpu_lock = threading.Lock()
         
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = self._select_device()
+
         # SOTA FIX: Use BF16/FP16 on GPU (Tensor Cores), FP32 on CPU (prevent PyTorch Half CPU kernels missing)
-        if torch.cuda.is_available():
+        if self.device == "cuda":
             self.compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         else:
             self.compute_dtype = torch.float32

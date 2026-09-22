@@ -203,6 +203,30 @@ class ProductionAsyncEngine:
         supports_fp8 = major >= 9 or (major == 8 and torch.cuda.get_device_name(0).lower().find("ada") != -1)
         kv_dtype = "fp8" if supports_fp8 else "auto"
 
+        # ── Concurrency ceiling: env-tunable without a code change/rebuild ──
+        # 256 is a reasonable default for a 7B model on a 32-40GB budget (see
+        # docs/SLM_Server_Architecture.md's memory math), but the real ceiling
+        # depends on average prompt/generation length and should be tuned per
+        # deployment. This MUST stay <= SSENSE_MAX_CONCURRENT_INFERENCE in
+        # docker-compose.yml (memory_orchestrator.InferenceQueue) — that
+        # queue's job is to admit at most this many requests to the engine at
+        # once, so the two numbers are two views of the same ceiling and
+        # should be changed together.
+        max_num_seqs = int(os.getenv("SSENSE_VLLM_MAX_NUM_SEQS", "256"))
+
+        # ── CPU-RAM KV-cache overflow (paged "swap" space) ──────────────
+        # vLLM's PagedAttention KV cache lives in a fixed-size GPU block pool
+        # sized by gpu_memory_utilization. Under a genuine burst (many
+        # sequences, long contexts) that pool can fill before max_num_seqs is
+        # reached; without swap_space vLLM's only recourse is to *preempt*
+        # (recompute from scratch) a lower-priority sequence — a latency
+        # cliff for whoever gets preempted. swap_space lets it page cold
+        # blocks out to host RAM instead and resume them cheaply. Default of
+        # 4 GiB matches vLLM's own upstream default; raise it on a host with
+        # RAM to spare (e.g. the 32-40GB VRAM + host RAM split this server is
+        # designed for) to absorb bigger bursts before any preemption happens.
+        swap_space_gb = float(os.getenv("SSENSE_VLLM_SWAP_SPACE_GB", "4"))
+
         return AsyncEngineArgs(
             model=self.base_model_path,
             enable_lora=True,
@@ -210,9 +234,10 @@ class ProductionAsyncEngine:
             max_lora_rank=128,
             max_cpu_loras=4,
             max_model_len=8192,
-            max_num_seqs=256,
+            max_num_seqs=max_num_seqs,
             gpu_memory_utilization=utilization,
             kv_cache_dtype=kv_dtype,
+            swap_space=swap_space_gb,
             dtype="bfloat16",
             enable_prefix_caching=True,
             enable_chunked_prefill=True,
