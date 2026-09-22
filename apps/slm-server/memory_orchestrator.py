@@ -14,9 +14,17 @@ import asyncio
 import hashlib
 import os
 import re
+import sys
 import time
 from collections import OrderedDict, deque
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 from audit_store import audit_store
 

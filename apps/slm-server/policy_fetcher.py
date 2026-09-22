@@ -29,6 +29,7 @@ import asyncio
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import socket
 import time
@@ -46,7 +47,7 @@ except ImportError:
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
 # ─── Constants ────────────────────────────────────────────────────────────────
-MAX_POLICY_CHARS   = 32_000
+MAX_POLICY_CHARS   = int(os.getenv("SSENSE_MAX_POLICY_CHARS", "64000"))
 MIN_POLICY_CHARS   = 500
 FETCH_TIMEOUT_S    = 20
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024   # 8 MB hard cap

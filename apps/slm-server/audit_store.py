@@ -30,9 +30,17 @@ Schema (single table):
 
 import asyncio
 import json
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 import aiosqlite
 
@@ -77,6 +85,7 @@ class AuditStore:
             if row:
                 return candidate
         # Check prefix match in SQLite
+        await self._ensure_db()
         if self._db:
             cur = await self._db.execute(
                 "SELECT domain_key FROM audit_cache WHERE domain_key LIKE ? LIMIT 1",
@@ -87,8 +96,14 @@ class AuditStore:
                 return row["domain_key"]
         return None
 
+    async def _ensure_db(self) -> None:
+        if self._db is None:
+            await self.initialize()
+
     # ── Lifecycle ─────────────────────────────────────────────────────────
     async def initialize(self) -> None:
+        if self._db is not None:
+            return
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(self._db_path)
         self._db.row_factory = aiosqlite.Row
@@ -269,6 +284,7 @@ class AuditStore:
         print(f"💾 [AuditStore] Saved audit for {key} (score={trust_score})")
 
     async def delete(self, domain: str) -> bool:
+        await self._ensure_db()
         key = _normalise(domain)
         self._chat_context_cache.pop(key, None)
         async with self._write_lock:
@@ -279,6 +295,7 @@ class AuditStore:
         return cur.rowcount > 0
 
     async def stats(self) -> Dict[str, Any]:
+        await self._ensure_db()
         cur  = await self._db.execute("SELECT COUNT(*) AS n FROM audit_cache")
         r1   = await cur.fetchone()
         cur2 = await self._db.execute(
@@ -295,6 +312,7 @@ class AuditStore:
 
     # ── Internal ──────────────────────────────────────────────────────────
     async def _fetch_row(self, key: str):
+        await self._ensure_db()
         cur = await self._db.execute(
             "SELECT * FROM audit_cache WHERE domain_key = ?", (key,)
         )

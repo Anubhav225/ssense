@@ -13,6 +13,15 @@ chatbot adapters, hot-swapped per request), across three hardware profiles:
 """
 
 import os
+import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 import json
 import asyncio
 import threading
@@ -119,7 +128,7 @@ class ProductionAsyncEngine:
         self._TextIteratorStreamer = TextIteratorStreamer
         self._StoppingCriteriaList = StoppingCriteriaList
 
-        cpu_threads = int(os.getenv("OMP_NUM_THREADS", "") or os.cpu_count() or 4)
+        cpu_threads = int(os.getenv("SSENSE_CPU_THREADS", "") or os.getenv("OMP_NUM_THREADS", "") or min(8, os.cpu_count() or 4))
         torch.set_num_threads(cpu_threads)
         print(f"[EngineCore/cpu] Booting Native Transformers Dual-LoRA Engine ({cpu_threads} CPU threads)...")
 
@@ -169,10 +178,17 @@ class ProductionAsyncEngine:
     # ─────────────────────────────────────────────────────────────
     def _init_vllm_engine(self):
         self.backend = "vllm"
-        from vllm.engine.async_llm_engine import AsyncLLMEngine
-        from vllm.engine.arg_utils import AsyncEngineArgs
-        from vllm.sampling_params import SamplingParams, StructuredOutputsParams
-        from vllm.lora.request import LoRARequest
+        try:
+            from vllm.engine.async_llm_engine import AsyncLLMEngine
+            from vllm.engine.arg_utils import AsyncEngineArgs
+            from vllm.sampling_params import SamplingParams, StructuredOutputsParams
+            from vllm.lora.request import LoRARequest
+        except (ImportError, ModuleNotFoundError) as exc:
+            print(f"⚠️  [EngineCore] vLLM not available in this environment ({exc}).")
+            print("⚠️  [EngineCore] Gracefully falling back to Native Transformers Dual-LoRA Engine.")
+            self.compute_profile = "cpu"
+            self._init_cpu_hf_engine()
+            return
 
         self._SamplingParams = SamplingParams
         self._StructuredOutputsParams = StructuredOutputsParams
@@ -351,10 +367,10 @@ class ProductionAsyncEngine:
     ) -> AsyncGenerator[str, None]:
         """Streams Conversational Chatbot tokens through the Chatbot LoRA in real-time."""
         if self.backend == "transformers":
-            streamer = self._TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
+            streamer = self._TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=15.0)
             inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024).to("cpu")
             in_len = inputs["input_ids"].shape[1]
-            chat_max = min(max_tokens, 220)
+            chat_max = min(max_tokens, 200)
             print(f"💬 [Engine/Chat] Streaming request: prompt={in_len} tokens, max_tokens={chat_max}...")
 
             im_end_id = self.tokenizer.convert_tokens_to_ids("<|im_end|>")
@@ -376,19 +392,27 @@ class ProductionAsyncEngine:
                 gen_kwargs["temperature"] = temperature
                 gen_kwargs["top_p"] = 0.9
 
+            gen_error = None
             def _run_chat_gen():
-                with self._lock:
-                    self.model.set_adapter("chatbot")
-                    with torch.no_grad():
-                        self.model.generate(**gen_kwargs)
+                nonlocal gen_error
+                try:
+                    with self._lock:
+                        self.model.set_adapter("chatbot")
+                        with torch.no_grad():
+                            self.model.generate(**gen_kwargs)
+                except Exception as e:
+                    gen_error = e
+                    print(f"🛑 [Engine/Chat] Generation error in background thread: {e}")
 
             thread = threading.Thread(target=_run_chat_gen, daemon=True)
             thread.start()
 
             def _get_next_token():
+                if gen_error is not None:
+                    return None
                 try:
                     return next(streamer)
-                except StopIteration:
+                except (StopIteration, Exception):
                     return None
 
             while True:

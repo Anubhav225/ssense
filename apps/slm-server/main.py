@@ -81,7 +81,12 @@ CHAT_MAX_TOKENS_THINKING = 2048
 
 # ── Model downloader ──────────────────────────────────────────────────────────
 def ensure_models_exist():
-    models_dir      = Path(os.getenv("MODELS_DIR", "/app/models"))
+    default_models = (
+        Path("/app/models")
+        if Path("/app/models").exists()
+        else (Path(__file__).resolve().parent.parent.parent / "ml" / "models")
+    )
+    models_dir      = Path(os.getenv("MODELS_DIR", str(default_models)))
     base_model_dir  = models_dir / "base" / "Qwen2.5-7B-Instruct"
     ssense_repo     = "PRiyanshu0-1/DPDP-SSense"
 
@@ -949,10 +954,32 @@ async def chat(request: Request, body: ChatRequest):
     parsing on this hot path.
     """
     user_header = request.headers.get("X-Ssense-User-Id", "")
-    user_id = f"{request.headers.get('X-Ssense-API-Key','')}:{user_header}" if user_header else f"{request.headers.get('X-Ssense-API-Key','')}:{get_client_ip(request)}"
+    api_key = request.headers.get("X-Ssense-API-Key", "")
+    user_id = f"{api_key}:{user_header}" if user_header else f"{api_key}:{get_client_ip(request)}"
 
-    limited, remaining = await memory_orchestrator.enforce_chat_rate_limit(user_id)
-    daily_limited, daily_rem, daily_reset = await memory_orchestrator.enforce_daily_chat_rate_limit(user_id)
+    # Rate limits are pre-enforced in verify_hmac_signature_chat dependency.
+    # Retrieve remaining quota recorded on request.state to avoid double-counting.
+    remaining = getattr(request.state, "chat_remaining_min", None)
+    daily_rem = getattr(request.state, "chat_remaining_day", None)
+    daily_reset = getattr(request.state, "chat_reset_day", 86400)
+
+    if remaining is None or daily_rem is None:
+        client_id = f"chat:{user_id}"
+        limited, remaining = await memory_orchestrator.enforce_chat_rate_limit(client_id)
+        daily_limited, daily_rem, daily_reset = await memory_orchestrator.enforce_daily_chat_rate_limit(client_id)
+        if limited:
+            raise HTTPException(
+                429,
+                "Chat rate limit exceeded (60 req/min). Audit is unlimited.",
+                headers={"Retry-After": "60", "X-RateLimit-Limit": "60", "X-RateLimit-Remaining": "0"},
+            )
+        if daily_limited:
+            raise HTTPException(
+                429,
+                "Daily chat quota exceeded (200 req/day per user). Resets tomorrow. Audit is unlimited.",
+                headers={"Retry-After": str(daily_reset), "X-DailyLimit-Limit": "200", "X-DailyLimit-Remaining": "0", "X-DailyLimit-Reset": str(daily_reset)},
+            )
+
     rate_limit_headers = {
         "X-RateLimit-Limit": "60",
         "X-RateLimit-Remaining": str(max(0, remaining)),
@@ -961,21 +988,6 @@ async def chat(request: Request, body: ChatRequest):
         "X-DailyLimit-Remaining": str(max(0, daily_rem)),
         "X-DailyLimit-Reset": str(daily_reset),
     }
-    if limited:
-        # Audits are never rate-limited — only chat. Retry-After is a flat
-        # 60s (the window size) since the sliding window means the exact
-        # next-available-slot time isn't a single fixed instant.
-        raise HTTPException(
-            429,
-            "Chat rate limit exceeded (60 req/min). Audit is unlimited.",
-            headers={**rate_limit_headers, "Retry-After": "60"},
-        )
-    if daily_limited:
-        raise HTTPException(
-            429,
-            "Daily chat quota exceeded (200 req/day per user). Resets tomorrow. Audit is unlimited.",
-            headers={**rate_limit_headers, "Retry-After": str(daily_reset)},
-        )
 
     clean_prompt = sanitize_input_prompt(body.userPrompt, is_audit_policy=False)
     await check_model_extraction_attempt(request, clean_prompt)

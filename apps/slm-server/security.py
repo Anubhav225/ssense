@@ -248,6 +248,7 @@ async def verify_hmac_signature_chat(request: Request) -> bool:
 
     request.state.chat_remaining_min = rem_min
     request.state.chat_remaining_day = rem_day
+    request.state.chat_reset_day = reset_after_s
     return await _verify_hmac_body(request)
 
 

@@ -9,6 +9,15 @@ Features:
 """
 
 import os
+import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 import re
 import json
 import asyncio
@@ -224,14 +233,23 @@ class AsyncHybridRAG:
         # 4. Mount Neural Models to GPU with BF16/FP16 Tensor Core Acceleration
         model_kwargs = {"torch_dtype": self.compute_dtype}
         embed_target = str(self.embed_model_path) if self.embed_model_path.exists() else "BAAI/bge-small-en-v1.5"
-        self.embed_model = SentenceTransformer(embed_target, device=self.device, model_kwargs=model_kwargs)
-        
+        try:
+            self.embed_model = SentenceTransformer(embed_target, device=self.device, model_kwargs=model_kwargs)
+        except TypeError:
+            self.embed_model = SentenceTransformer(embed_target, device=self.device)
+
         if self.use_reranker:
             reranker_target = str(self.reranker_model_path) if self.reranker_model_path.exists() else "BAAI/bge-reranker-v2-m3"
             try:
                 self.reranker_model = CrossEncoder(reranker_target, max_length=512, device=self.device, model_kwargs=model_kwargs)
+            except TypeError:
+                try:
+                    self.reranker_model = CrossEncoder(reranker_target, max_length=512, device=self.device)
+                except Exception as e:
+                    print(f"⚠️  [RAGEngine] Failed to load reranker {reranker_target}: {e}")
+                    self.reranker_model = None
             except Exception as e:
-                print(f"⚠️ [RAGEngine] Failed to load reranker {reranker_target}: {e}")
+                print(f"⚠️  [RAGEngine] Failed to load reranker {reranker_target}: {e}")
                 self.reranker_model = None
         else:
             self.reranker_model = None
@@ -396,5 +414,10 @@ class AsyncHybridRAG:
         return context_str, hits
 
 
-# Global Singleton (Defaults to Reranker Enabled for SOTA Accuracy)
-rag_engine = AsyncHybridRAG(use_reranker=True)
+# Global Singleton (Auto-detects reranker model presence; falls back to fast RRF)
+_default_use_reranker = (
+    os.getenv("SSENSE_USE_RERANKER", "true" if (MODELS_DIR / "bge-reranker-v2-m3").exists() else "false")
+    .strip()
+    .lower() in ("1", "true")
+)
+rag_engine = AsyncHybridRAG(use_reranker=_default_use_reranker)
