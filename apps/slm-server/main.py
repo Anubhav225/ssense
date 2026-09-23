@@ -557,14 +557,14 @@ def translate_audit_for_prompt(report: Dict[str, Any]) -> str:
     violations = report.get("violations") or []
     lines      = [f"DPDP Trust Score: {score}/100."]
     if not violations:
-        lines.append("Status: Compliant — no critical violations found.")
+        lines.append("Status: Compliant - no critical violations found.")
     else:
         lines.append(f"Found {len(violations)} violation(s):")
         for i, v in enumerate(violations, 1):
             vtype = v.get("violation_type", "Unknown").replace("_", " ")
             ref   = v.get("statute_reference", "N/A")
             ev    = v.get("evidence_quote", "")[:120]
-            lines.append(f"{i}. {vtype} (Ref: {ref}) — \"{ev}…\"")
+            lines.append(f'{i}. {vtype} (Ref: {ref}) - "{ev}..."')
     reasoning = report.get("global_legal_reasoning", "")
     if reasoning:
         lines.append(f"Legal reasoning: {reasoning[:300]}")
