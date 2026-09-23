@@ -424,21 +424,27 @@ class MemoryOrchestrator:
         async with self._lock:
             key = self._normalise(domain_key)
             if key in self.active_audits:
-                return False, self.active_audits[key]
+                existing_fut = self.active_audits[key]
+                if not existing_fut.done():
+                    return False, existing_fut
+                self.active_audits.pop(key, None)
             loop = asyncio.get_running_loop()
             fut = loop.create_future()
             self.active_audits[key] = fut
             return True, fut
 
     async def complete_audit_lease(
-        self, domain_key: str, result: Any = None, error: Optional[Exception] = None
+        self, domain_key: str, result: Any = None, error: Optional[BaseException] = None
     ) -> None:
         async with self._lock:
             key = self._normalise(domain_key)
             fut = self.active_audits.pop(key, None)
             if fut and not fut.done():
                 if error:
-                    fut.set_exception(error)
+                    if isinstance(error, asyncio.CancelledError):
+                        fut.cancel()
+                    else:
+                        fut.set_exception(error)
                 else:
                     fut.set_result(result)
 

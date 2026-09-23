@@ -74,9 +74,10 @@ class StopAtClosingBrace:
             e = full.rfind("}")
             if s != -1 and e > s:
                 try:
-                    json.loads(full[s:e+1])
-                    self.stopped = True
-                    return True
+                    obj = json.loads(full[s:e+1])
+                    if isinstance(obj, dict) and ("dpdp_trust_score" in obj or "global_legal_reasoning" in obj or "violations" in obj):
+                        self.stopped = True
+                        return True
                 except Exception:
                     pass
         return False
@@ -178,6 +179,8 @@ class ProductionAsyncEngine:
             adapter_name="chatbot",
         )
 
+        base_model.config.use_cache = True
+        self.model.config.use_cache = True
         self.model.eval()
         self._lock = threading.Lock()
         print(f"✅ [EngineCore/cpu] Multi-LoRA HF Engine ready. Active adapters: {list(self.model.peft_config.keys())}")
@@ -331,11 +334,12 @@ class ProductionAsyncEngine:
                     with torch.no_grad():
                         outputs = self.model.generate(
                             **inputs,
-                            max_new_tokens=min(max_tokens, 768),
+                            max_new_tokens=min(max_tokens, 256 if self.compute_profile == "cpu" else 768),
                             do_sample=False,
                             eos_token_id=eos_ids,
                             pad_token_id=self.tokenizer.pad_token_id,
                             stopping_criteria=criteria,
+                            use_cache=True,
                         )
                     input_len = inputs["input_ids"].shape[1]
                     gen_ids = outputs[0][input_len:]
@@ -377,11 +381,11 @@ class ProductionAsyncEngine:
         """Streams Conversational Chatbot tokens through the Chatbot LoRA in real-time."""
         if self.backend == "transformers":
             stop_event = threading.Event()
-            # 120s timeout allows CPU prompt prefill and token generation without premature cutoff
-            streamer = self._TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=120.0)
+            # 240s timeout allows CPU prompt prefill and token generation without premature cutoff
+            streamer = self._TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=240.0)
             inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024).to("cpu")
             in_len = inputs["input_ids"].shape[1]
-            chat_max = min(max_tokens, 200)
+            chat_max = min(max_tokens, 120) if self.compute_profile == "cpu" else min(max_tokens, 500)
             print(f"💬 [Engine/Chat] Streaming request: prompt={in_len} tokens, max_tokens={chat_max}...", flush=True)
 
             im_end_id = self.tokenizer.convert_tokens_to_ids("<|im_end|>")
@@ -401,6 +405,7 @@ class ProductionAsyncEngine:
                 "pad_token_id": self.tokenizer.pad_token_id,
                 "eos_token_id": eos_ids,
                 "stopping_criteria": stopping_criteria,
+                "use_cache": True,
             }
             if temperature > 0.0:
                 gen_kwargs["temperature"] = temperature

@@ -93,6 +93,20 @@ async function enqueueChat<T>(domain: string, task: () => Promise<T>): Promise<T
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'ssense-chat-stream') return;
 
+  // MV3 Keepalive: ping client and platformInfo every 10s to prevent service worker termination
+  const keepAlive = setInterval(() => {
+    try {
+      port.postMessage({ type: 'PING' });
+      chrome.runtime.getPlatformInfo().catch(() => {});
+    } catch {
+      clearInterval(keepAlive);
+    }
+  }, 10_000);
+
+  port.onDisconnect.addListener(() => {
+    clearInterval(keepAlive);
+  });
+
   port.onMessage.addListener(async (msg) => {
     if (msg.type === 'START_CHAT') {
       const { domain, userPrompt, responseMode, requestId } = msg;
@@ -364,6 +378,9 @@ async function _triggerAudit(
 
   _concurrentAudits++;
   const exec=(async()=>{
+    const keepAlive = setInterval(() => {
+      chrome.runtime.getPlatformInfo().catch(() => {});
+    }, 15_000);
     try {
       const r=await executeAuditByUrl(domain,policyUrl,requestId,forceRefresh);
 
@@ -403,6 +420,7 @@ async function _triggerAudit(
       }
       return r;
     } finally {
+      clearInterval(keepAlive);
       _concurrentAudits--;
       _active.delete(ck);
     }

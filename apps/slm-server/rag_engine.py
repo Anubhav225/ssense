@@ -191,11 +191,15 @@ class AsyncHybridRAG:
         self.is_ready = False
         self.cache = LRUEmbeddingCache(maxsize=2048)
         
-        # Exact Stopwords from evaluate_rag.py for 1:1 mathematical parity
+        # Extended Stopwords for 1:1 mathematical parity and noise rejection
         self.stopwords = {
             "the", "a", "an", "is", "are", "was", "were", "of", "and", "in", 
             "to", "for", "with", "on", "at", "by", "from", "as", "that", "this", 
-            "it", "be", "or", "which", "will", "would", "could", "should", "their", "they"
+            "it", "be", "or", "which", "will", "would", "could", "should", "their", "they",
+            "what", "who", "whom", "whose", "when", "where", "why", "how",
+            "there", "here", "all", "any", "both", "each", "few", "more", "most",
+            "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so",
+            "than", "too", "very", "can", "just", "now"
         }
 
     async def initialize(self):
@@ -291,9 +295,13 @@ class AsyncHybridRAG:
             return []
 
         # A. Lexical (BM25)
-        q_tokens     = self._tokenize(query)
-        bm25_scores  = self.bm25.get_scores(q_tokens)
-        top_bm25_idx = fast_top_k(bm25_scores, k=retrieval_depth)
+        q_tokens = self._tokenize(query)
+        if self.bm25 and q_tokens:
+            bm25_scores  = self.bm25.get_scores(q_tokens)
+            top_bm25_idx = fast_top_k(bm25_scores, k=retrieval_depth)
+        else:
+            bm25_scores  = np.zeros(len(self.chunks))
+            top_bm25_idx = np.array([], dtype=int)
 
         # B. Dense (BGE cosine) — GPU lock guards the shared embed_model instance
         cache_key = hashlib.sha256(query.encode("utf-8")).hexdigest()
@@ -308,6 +316,13 @@ class AsyncHybridRAG:
 
         dense_scores  = np.dot(self.dense_embeddings, q_emb)
         top_dense_idx = fast_top_k(dense_scores, k=retrieval_depth)
+
+        # Relevance guard: if no lexical match and dense cosine similarity is below threshold (< 0.65),
+        # query is ungrounded / conversational / gibberish — return empty to trigger RAFT refusal
+        max_bm25 = float(np.max(bm25_scores)) if len(bm25_scores) > 0 else 0.0
+        max_dense = float(np.max(dense_scores)) if len(dense_scores) > 0 else 0.0
+        if max_bm25 <= 0.0 and max_dense < 0.65:
+            return []
 
         # C. RRF merge with pre-filter state-isolation.
         #
@@ -330,6 +345,8 @@ class AsyncHybridRAG:
         # State queries receive all chunks (both general and state-specific).
         rrf_scores: Dict[int, float] = {}
         for rank, idx in enumerate(top_bm25_idx):
+            if bm25_scores[idx] <= 0.0:
+                continue  # Never award RRF credit to non-matching documents
             if not is_state_query and self.metadatas[idx].get("applies_to") == "state":
                 continue  # banned from private/commercial query candidate pool
             rrf_scores[idx] = rrf_scores.get(idx, 0.0) + 1.0 / (rrf_k + rank + 1)
@@ -338,6 +355,9 @@ class AsyncHybridRAG:
             if not is_state_query and self.metadatas[idx].get("applies_to") == "state":
                 continue
             rrf_scores[idx] = rrf_scores.get(idx, 0.0) + 1.0 / (rrf_k + rank + 1)
+
+        if not rrf_scores:
+            return []
 
         top_rrf = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)[:rerank_depth]
 
@@ -376,7 +396,7 @@ class AsyncHybridRAG:
         was trained into the model, instead of a pseudo-XML stub that confuses
         attention heads and risks schema-bleed (Pillar 8).
         """
-        if not self.is_ready:
+        if not self.is_ready or not query or not re.search(r'\w', query):
             return "", []
 
         is_state = self._detect_state_query(query)
@@ -401,14 +421,19 @@ class AsyncHybridRAG:
             if not hits:
                 return "", []
 
-        # CRITICAL FIX (Atigravity review — Defect 2):
-        # Previous implementation wrapped chunks in XML:
-        #   <document id="1"><metadata>...</metadata><text>...</text></document>
-        # The fine-tuned Qwen2.5-7B was trained exclusively on plain-text blocks:
-        #   [STATUTORY CONTEXT]:\nSection 8...\n\nRule 13...
-        # XML tags are out-of-distribution tokens that elevate schema-bleed risk
-        # (Pillar 8: chatbot.schema_preamble_bleed_rate <= 0.0%). Reverting to
-        # the training-distribution format from train_chatbot.py / run_chatbot_evals.py.
+        # Deduplicate identical or near-identical text passages across hits
+        seen_chunks = set()
+        deduped_hits = []
+        for h in hits:
+            norm_c = " ".join(h["chunk"].split())
+            if norm_c not in seen_chunks:
+                seen_chunks.add(norm_c)
+                deduped_hits.append(h)
+        hits = deduped_hits
+        if not hits:
+            return "", []
+
+        # Plain-text [STATUTORY CONTEXT]: block matching model training distribution
         formatted_chunks = [h["chunk"].strip() for h in hits]
         context_str = "[STATUTORY CONTEXT]:\n" + "\n\n".join(formatted_chunks)
         return context_str, hits

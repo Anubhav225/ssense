@@ -414,7 +414,7 @@ def _audit_max_chunks_for_profile() -> int:
     tradeoff, especially on the CPU profile.
     """
     if COMPUTE_PROFILE == "cpu":
-        return int(os.getenv("SSENSE_AUDIT_MAX_CHUNKS_CPU", "6"))
+        return int(os.getenv("SSENSE_AUDIT_MAX_CHUNKS_CPU", "1"))
     return int(os.getenv("SSENSE_AUDIT_MAX_CHUNKS_GPU", "20"))
 
 
@@ -424,6 +424,8 @@ def select_operative_chunks(chunks: list[str], max_chunks: int = 2) -> list[tupl
     (see that function's docstring). In the normal case (chunks within the
     cap), callers should evaluate every chunk directly rather than calling
     this at all, so no section is ever skipped without it being logged."""
+    if max_chunks <= 0:
+        return []
     if len(chunks) <= max_chunks:
         return list(enumerate(chunks))
 
@@ -435,12 +437,7 @@ def select_operative_chunks(chunks: list[str], max_chunks: int = 2) -> list[tupl
         scored.append((idx, score, c))
 
     scored.sort(key=lambda x: x[1], reverse=True)
-    selected = [scored[0]]
-    for item in scored[1:]:
-        if len(selected) >= max_chunks:
-            break
-        selected.append(item)
-
+    selected = scored[:max_chunks]
     selected.sort(key=lambda x: x[0])
     return [(idx, c) for idx, _, c in selected]
 
@@ -537,7 +534,8 @@ def _build_audit_prompt(domain: str, clean_text: str) -> str:
     # What remains is a generous backstop (well above max_chunk_chars +
     # overlap) that should essentially never trigger in normal operation —
     # a true last-resort safety net, not a routine truncation step.
-    policy_slice = clean_text[:4500].strip()
+    max_chars = 1800 if COMPUTE_PROFILE == "cpu" else 4500
+    policy_slice = clean_text[:max_chars].strip()
     sys_msg = (
         "You are an expert DPDP Act 2023 forensic legal auditor. "
         "Analyze the provided corporate privacy policy for statutory violations under the "
@@ -610,7 +608,7 @@ _audit_chunk_semaphore: Optional[asyncio.Semaphore] = None
 def _get_audit_chunk_semaphore() -> asyncio.Semaphore:
     global _audit_chunk_semaphore
     if _audit_chunk_semaphore is None:
-        default_limit = "8" if COMPUTE_PROFILE == "cpu" else "32"
+        default_limit = "1" if COMPUTE_PROFILE == "cpu" else "32"
         limit = int(os.getenv("SSENSE_AUDIT_MAX_CONCURRENT_CHUNKS", default_limit))
         _audit_chunk_semaphore = asyncio.Semaphore(limit)
     return _audit_chunk_semaphore
@@ -657,7 +655,9 @@ async def _run_inference(domain: str, clean_text: str) -> Dict[str, Any]:
     to produce, which also means one less LLM call (and one less unit of
     GPU contention against chat) per multi-chunk audit.
     """
-    chunks = chunk_policy_text(clean_text, max_chunk_chars=3200, overlap_sentences=2)
+    chunk_size = 1800 if COMPUTE_PROFILE == "cpu" else 3200
+    overlap = 1 if COMPUTE_PROFILE == "cpu" else 2
+    chunks = chunk_policy_text(clean_text, max_chunk_chars=chunk_size, overlap_sentences=overlap)
     max_eval_chunks = _audit_max_chunks_for_profile()
 
     if len(chunks) > max_eval_chunks:
@@ -702,8 +702,13 @@ async def _run_inference(domain: str, clean_text: str) -> Dict[str, Any]:
         print(f"⚠️  [Audit/Pipeline] {domain}: {len(chunk_errors)} chunk(s) errored during generation "
               f"(continuing with {len(chunk_reports)} successful result(s)): {chunk_errors[:2]}")
 
-    if len(chunk_reports) == 1:
-        return chunk_reports[0]
+    if not chunk_reports:
+        return {
+            "global_legal_reasoning": f"Audit of {domain} could not process policy sections.",
+            "violations": [],
+            "dpdp_trust_score": 50,
+            "subtlety_score": 0,
+        }
 
     # Keep only chunks that found something — "good portions are removed".
     # A chunk counts as flagged if its score is below a clean 100 OR it
@@ -841,8 +846,10 @@ async def audit_by_url(request: Request, body: AuditByUrlRequest):
     if not is_leader and not body.force_refresh:
         try:
             print(f"👥 [Audit/URL] Coalescing follower waiting on leader audit for {body.domain}...")
-            coalesced_result = await asyncio.wait_for(lease_fut, timeout=90.0)
+            coalesced_result = await asyncio.wait_for(lease_fut, timeout=180.0)
             return JSONResponse(content=coalesced_result, headers=audit_headers)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             print(f"⚠️ [Audit/URL] Follower lease wait failed for {body.domain} ({e}), falling back to independent audit")
             is_leader, lease_fut = await memory_orchestrator.acquire_audit_lease(body.domain)
@@ -885,7 +892,7 @@ async def audit_by_url(request: Request, body: AuditByUrlRequest):
             if is_leader:
                 await memory_orchestrator.complete_audit_lease(body.domain, result=resp_data)
             return JSONResponse(content=resp_data, headers=audit_headers)
-    except Exception as exc:
+    except BaseException as exc:
         if is_leader:
             await memory_orchestrator.complete_audit_lease(body.domain, error=exc)
         raise
@@ -1057,7 +1064,8 @@ async def chat(request: Request, body: ChatRequest):
                 return
 
             try:
-                context_str, hits = await rag_engine.retrieve_context(clean_prompt, top_k=3)
+                rag_k = 1 if COMPUTE_PROFILE == "cpu" else 3
+                context_str, hits = await rag_engine.retrieve_context(clean_prompt, top_k=rag_k)
                 citations = [h["metadata"] for h in hits]
 
                 # Conditionally prepend [STATUTORY CONTEXT] block.

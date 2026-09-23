@@ -25,6 +25,14 @@ Algorithm (mirrors extractor-core.ts exactly, now authoritative):
      caller's responsibility to discard after inference.
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 import asyncio
 import hashlib
 import ipaddress
@@ -116,6 +124,25 @@ _NON_LATIN_RE = re.compile(
 )
 _NON_LATIN_LINE_THRESHOLD = 0.30   # drop line if ≥30% non-Latin chars
 
+def _build_accept_encoding() -> str:
+    enc = ["gzip", "deflate"]
+    try:
+        import brotli  # noqa: F401
+        enc.append("br")
+    except ImportError:
+        try:
+            import brotlicffi  # noqa: F401
+            enc.append("br")
+        except ImportError:
+            pass
+    try:
+        import zstandard  # noqa: F401
+        enc.append("zstd")
+    except ImportError:
+        pass
+    return ", ".join(enc)
+
+
 # Browser-like request headers — full Chromium 136 Client Hints set.
 # Modern WAFs (Cloudflare, Akamai, Imperva, AWS WAF) fingerprint requests
 # missing Sec-CH-UA / Sec-Fetch-* headers and return 403/503.  These headers
@@ -132,7 +159,7 @@ _REQUEST_HEADERS = {
         "application/signed-exchange;v=b3;q=0.7"
     ),
     "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Accept-Encoding": _build_accept_encoding(),
     "Cache-Control": "no-cache",
     "Pragma": "no-cache",
     # ── Chromium Client Hints (WAF bypass) ──────────────────────────────
@@ -412,8 +439,12 @@ def _strip_non_english(text: str) -> Tuple[str, int]:
 
 
 def _clean_text(raw: str) -> str:
-    """Collapse runs of whitespace and format into clean, readable paragraphs."""
-    lines = [l.strip() for l in raw.splitlines()]
+    """Collapse runs of whitespace and format into clean, readable paragraphs.
+    Strips non-printable/control binary artifacts and Unicode replacement chars
+    to prevent corrupted tokenizer prompts.
+    """
+    sanitized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd]", " ", raw)
+    lines = [l.strip() for l in sanitized.splitlines()]
     paragraphs: list[str] = []
     current_p: list[str] = []
     for line in lines:

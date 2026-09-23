@@ -456,9 +456,9 @@ def validate_and_repair_report(raw_json_str: str) -> Dict[str, Any]:
         try:
             report["dpdp_trust_score"] = max(0, min(100, int(report["dpdp_trust_score"])))
         except (ValueError, TypeError):
-            report["dpdp_trust_score"] = 50
+            report["dpdp_trust_score"] = 100 if not report.get("violations") else 50
     else:
-        report["dpdp_trust_score"] = 50
+        report["dpdp_trust_score"] = 100 if not report.get("violations") else 50
 
     if "subtlety_score" in report:
         try:

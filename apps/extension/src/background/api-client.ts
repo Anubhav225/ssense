@@ -121,12 +121,12 @@ function wrap(e: unknown, fb: string): SsenseError {
 }
 
 // ─── Shared fetch helpers ──────────────────────────────────────────────────────
-async function fetchJSON<T>(endpoint: string, method: 'GET'|'POST', body: any, cfg: ServerConfig, retries=2): Promise<T> {
+async function fetchJSON<T>(endpoint: string, method: 'GET'|'POST', body: any, cfg: ServerConfig, retries=2, timeoutMs=120_000): Promise<T> {
   if (!navigator.onLine) throw new SsenseError('No internet connection.','network',true);
   const url = `${cfg.url.replace(/\/$/,'')}${endpoint}`;
   for (let i=0; i<=retries; i++) {
     const ctrl = new AbortController();
-    const tid  = setTimeout(()=>ctrl.abort(), 30_000);
+    const tid  = setTimeout(()=>ctrl.abort(), timeoutMs);
     try {
       const r = await fetch(url, { method, headers: await signedHeaders(cfg,method,endpoint),
         body: body?JSON.stringify(body):undefined, signal:ctrl.signal, credentials:'omit' });
@@ -157,7 +157,7 @@ async function fetchSSE(endpoint: string, body: any, cfg: ServerConfig, onChunk?
   if (!navigator.onLine) throw new SsenseError('No internet connection.','network',true);
   const url = `${cfg.url.replace(/\/$/,'')}${endpoint}`;
   const ctrl = new AbortController();
-  const tid  = setTimeout(()=>ctrl.abort(), 120_000);
+  const tid  = setTimeout(()=>ctrl.abort(), 240_000);
   try {
     const r = await fetch(url, { method:'POST', headers: await signedHeaders(cfg,'POST',endpoint),
       body:JSON.stringify(body), signal:ctrl.signal, credentials:'omit' });
@@ -241,7 +241,7 @@ export async function executeAuditByUrl(
   if (!cfg.configured) return {type:'ERROR',requestId,success:false,error:'Server not configured. Open Settings.',errorKind:'auth',retryable:false};
   try {
     const d = await fetchJSON<AuditServerResponse>('/v1/audit/by-url','POST',
-      {domain, policyUrl, force_refresh:forceRefresh}, cfg);
+      {domain, policyUrl, force_refresh:forceRefresh}, cfg, 0, 240_000);
     const report = d?.data ?? (d as any)?.report ?? d;
     if (!report||!Array.isArray(report.violations)) throw new SsenseError('Server returned invalid audit report.','parse',false);
     return {type:'AUDIT_POLICY_RESULT',requestId,success:true,report:report as AuditReport,
@@ -259,7 +259,7 @@ export async function executeAuditPolicy(
   if (!cfg.configured) return {type:'ERROR',requestId,success:false,error:'Server not configured.',errorKind:'auth',retryable:false};
   try {
     const d = await fetchJSON<AuditServerResponse>('/v1/audit','POST',
-      {domain,policyText,force_refresh:forceRefresh},cfg);
+      {domain,policyText,force_refresh:forceRefresh},cfg, 0, 240_000);
     const report = d?.data ?? (d as any)?.report ?? d;
     if (!report||!Array.isArray(report.violations)) throw new SsenseError('Invalid audit report.','parse',false);
     return {type:'AUDIT_POLICY_RESULT',requestId,success:true,report:report as AuditReport,cached:d.source!=='inference'};
