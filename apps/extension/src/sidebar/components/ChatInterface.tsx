@@ -519,6 +519,19 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
     setInput('');
     setChattingFor(threadDomain);
 
+    setLoadingText(`Evaluating ${threadDomain} policy records...`);
+    const stageTimer1 = setTimeout(() => {
+      setLoadingText('Cross-referencing DPDP Act provisions...');
+    }, 6000);
+    const stageTimer2 = setTimeout(() => {
+      setLoadingText(responseMode === 'thinking' ? 'Synthesizing comprehensive legal reasoning...' : 'Formulating concise response...');
+    }, 15000);
+
+    const clearStageTimers = () => {
+      clearTimeout(stageTimer1);
+      clearTimeout(stageTimer2);
+    };
+
     try {
       const port = chrome.runtime.connect({ name: 'ssense-chat-stream' });
       livePortRef.current = port;
@@ -536,6 +549,8 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
         // siteB's conversation.
         if (!isStillTheActiveThread()) {
           if (streamMsg.type === 'DONE' || streamMsg.type === 'ERROR') {
+            clearStageTimers();
+            setLoadingText('Connecting to Ssense AI...');
             setChattingFor(null);
             if (livePortRef.current === port) livePortRef.current = null;
             port.disconnect();
@@ -544,6 +559,7 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
           return;
         }
         if (streamMsg.type === 'CHUNK') {
+          clearStageTimers();
           accumulatedAiText += streamMsg.delta || '';
           setMessages(prev => {
             if (!messageAppended) {
@@ -555,11 +571,15 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
             return updated;
           });
         } else if (streamMsg.type === 'DONE') {
+          clearStageTimers();
+          setLoadingText('Connecting to Ssense AI...');
           if (streamMsg.rateLimit) setChatQuota(streamMsg.rateLimit);
           setChattingFor(null);
           if (livePortRef.current === port) livePortRef.current = null;
           port.disconnect();
         } else if (streamMsg.type === 'ERROR') {
+          clearStageTimers();
+          setLoadingText('Connecting to Ssense AI...');
           const isRateLimited = streamMsg.errorKind === 'server' && /rate limit/i.test(streamMsg.error || '');
           if (isRateLimited) {
             setCooldownUntil(Date.now() + (streamMsg.rateLimit?.windowSeconds ?? 60) * 1000);
@@ -572,24 +592,28 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
         }
       });
 
-      // 60s silence guard: an SSE stream that hangs after headers (network
-      // partition, server crash mid-stream) previously left isChatting
-      // stuck true forever with no recovery. Reset on every message.
+      // 120s silence guard: allows sufficient headroom for CPU prompt prefill
+      // on multi-site queries without premature cutoff. Reset on every message.
       let silenceTimer: ReturnType<typeof setTimeout>;
       const armSilenceTimer = () => {
         clearTimeout(silenceTimer);
         silenceTimer = setTimeout(() => {
           if (livePortRef.current === port) {
+            clearStageTimers();
+            setLoadingText('Connecting to Ssense AI...');
             setMessages(prev => [...prev, { role: 'ai', text: '⚠️ The response timed out. Please try again.' }]);
             setChattingFor(null);
             livePortRef.current = null;
             try { port.disconnect(); } catch {}
           }
-        }, 60_000);
+        }, 120_000);
       };
       port.onMessage.addListener(armSilenceTimer);
       armSilenceTimer();
-      port.onDisconnect.addListener(() => clearTimeout(silenceTimer));
+      port.onDisconnect.addListener(() => {
+        clearStageTimers();
+        clearTimeout(silenceTimer);
+      });
 
       port.postMessage({
         type: 'START_CHAT',

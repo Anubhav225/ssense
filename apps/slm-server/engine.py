@@ -385,8 +385,9 @@ class ProductionAsyncEngine:
             streamer = self._TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True, timeout=240.0)
             inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024).to("cpu")
             in_len = inputs["input_ids"].shape[1]
-            chat_max = min(max_tokens, 120) if self.compute_profile == "cpu" else min(max_tokens, 500)
-            print(f"💬 [Engine/Chat] Streaming request: prompt={in_len} tokens, max_tokens={chat_max}...", flush=True)
+            chat_max = min(max_tokens, 200) if self.compute_profile == "cpu" else min(max_tokens, 500)
+            is_sampling = (temperature > 0.0)
+            print(f"💬 [Engine/Chat] Streaming request: prompt={in_len} tokens, max_tokens={chat_max}, temp={temperature} (sampling={is_sampling})...", flush=True)
 
             im_end_id = self.tokenizer.convert_tokens_to_ids("<|im_end|>")
             endoftext_id = self.tokenizer.convert_tokens_to_ids("<|endoftext|>")
@@ -401,13 +402,13 @@ class ProductionAsyncEngine:
                 **inputs,
                 "streamer": streamer,
                 "max_new_tokens": chat_max,
-                "do_sample": True if temperature > 0.0 else False,
+                "do_sample": is_sampling,
                 "pad_token_id": self.tokenizer.pad_token_id,
                 "eos_token_id": eos_ids,
                 "stopping_criteria": stopping_criteria,
                 "use_cache": True,
             }
-            if temperature > 0.0:
+            if is_sampling:
                 gen_kwargs["temperature"] = temperature
                 gen_kwargs["top_p"] = 0.9
 

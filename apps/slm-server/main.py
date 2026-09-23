@@ -75,8 +75,8 @@ if COMPUTE_PROFILE_ENV in ("", "auto"):
 else:
     COMPUTE_PROFILE = COMPUTE_PROFILE_ENV
 
-CHAT_MAX_TOKENS_CONCISE  = 300
-CHAT_MAX_TOKENS_THINKING = 2048
+CHAT_MAX_TOKENS_CONCISE  = 50
+CHAT_MAX_TOKENS_THINKING = 200
 
 
 # ── Model downloader ──────────────────────────────────────────────────────────
@@ -551,24 +551,23 @@ def _build_audit_prompt(domain: str, clean_text: str) -> str:
 
 
 def translate_audit_for_prompt(report: Dict[str, Any]) -> str:
-    """Natural-language summary injected into chat prompts.
+    """Compact statutory summary injected into chat prompts.
     Computed ONCE after inference and stored in audit_store.chat_context."""
     score      = report.get("dpdp_trust_score", 50)
     violations = report.get("violations") or []
-    lines      = [f"DPDP Trust Score: {score}/100."]
     if not violations:
-        lines.append("Status: Compliant - no critical violations found.")
-    else:
-        lines.append(f"Found {len(violations)} violation(s):")
-        for i, v in enumerate(violations, 1):
-            vtype = v.get("violation_type", "Unknown").replace("_", " ")
-            ref   = v.get("statute_reference", "N/A")
-            ev    = v.get("evidence_quote", "")[:120]
-            lines.append(f'{i}. {vtype} (Ref: {ref}) - "{ev}..."')
-    reasoning = report.get("global_legal_reasoning", "")
-    if reasoning:
-        lines.append(f"Legal reasoning: {reasoning[:300]}")
-    return "\n".join(lines)
+        return f"Score: {score}/100 (Compliant, no critical violations found)."
+
+    parts = [f"Score: {score}/100 | {len(violations)} Violation(s):"]
+    for i, v in enumerate(violations[:3], 1):
+        vtype = v.get("violation_type", "Unknown").replace("_", " ").title()
+        ref   = v.get("statute_reference", "DPDP")
+        ev    = v.get("evidence_quote", "").strip()[:65]
+        if ev:
+            parts.append(f'{i}. {ref} {vtype}: "{ev}"')
+        else:
+            parts.append(f"{i}. {ref} {vtype}")
+    return "\n".join(parts)
 
 
 def _audit_response(source: str, report: Dict[str, Any], meta: Optional[Dict] = None) -> Dict:
@@ -1048,7 +1047,7 @@ async def chat(request: Request, body: ChatRequest):
     length_instr = (
         "Think step by step through the DPDP provisions. A thorough, well-reasoned answer is expected."
         if mode == "thinking"
-        else "Answer in 2-4 sentences. Be direct and skip preamble."
+        else "Answer in 2-3 direct sentences under 40 words. Be direct and skip preamble."
     )
 
     async def _primary():
@@ -1102,7 +1101,10 @@ async def chat(request: Request, body: ChatRequest):
 
                 req_id = str(uuid.uuid4())
                 generated_tokens = []
-                async for tok in llm_engine.generate_chat_stream(req_id, prompt, max_tokens=max_tokens):
+                temperature = 0.3 if mode == "thinking" else 0.0
+                async for tok in llm_engine.generate_chat_stream(
+                    req_id, prompt, max_tokens=max_tokens, temperature=temperature
+                ):
                     generated_tokens.append(tok)
                     await broadcaster.emit("token", tok)
                     yield f"data: {json.dumps({'event':'token','data':tok})}\n\n"
