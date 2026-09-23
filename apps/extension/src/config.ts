@@ -1,21 +1,20 @@
 // apps/extension/src/config.ts
 //
-// The extension only ever talks to one of two fixed endpoints. There is
-// intentionally no way to type an arbitrary URL into the UI anymore —
-// that was a support/security liability (typos, phishing endpoints,
-// stale tunnels). Change these two constants at build time if the
-// production domain changes; end users just pick "Local" or "Online".
+// Dynamic Domain & Connection Configuration
+// The default server URL is injected from the VITE_SSENSE_SERVER_URL environment variable
+// (e.g. Cloudflare Tunnel URL, lab server domain, or local development server).
 
-/** Local SLM server, e.g. `docker compose up` on the same machine. */
-export const LOCAL_SERVER_URL = 'http://localhost:8080';
+/** Default server URL baked in from build environment variable (VITE_SSENSE_SERVER_URL). */
+export const DEFAULT_SERVER_URL: string = import.meta.env.VITE_SSENSE_SERVER_URL || 'http://localhost:8000';
 
-/** Hosted production SLM server, behind Nginx/TLS. */
-export const ONLINE_SERVER_URL = 'https://api.ssense.app';
+/** Local loopback fallback for direct container dev. */
+export const LOCAL_SERVER_URL: string = 'http://localhost:8000';
 
 export type ServerMode = 'auto' | 'local' | 'online';
 
 export const DEFAULT_SERVER_MODE: ServerMode = 'auto';
 
 export function urlForMode(mode: Exclude<ServerMode, 'auto'>): string {
-  return mode === 'local' ? LOCAL_SERVER_URL : ONLINE_SERVER_URL;
+  return mode === 'local' ? LOCAL_SERVER_URL : DEFAULT_SERVER_URL;
 }
+

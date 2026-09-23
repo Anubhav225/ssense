@@ -30,7 +30,7 @@ function App() {
     return () => chrome.tabs.onActivated.removeListener(readTab);
   }, []);
 
-  if (view === 'history') return <HistoryView onBack={() => setView('audit')} />;
+  if (view === 'history') return <HistoryView onBack={() => setView('audit')} onOpenPrivacy={(d) => { setDomain(d); setView('privacy'); }} />;
   if (view === 'privacy' && domain) return <PrivacyView domain={domain} onBack={() => setView('audit')} />;
   return <ChatInterface onOpenHistory={() => setView('history')} onOpenPrivacy={() => setView('privacy')} />;
 }

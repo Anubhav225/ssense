@@ -148,21 +148,35 @@ class _TrustedProxyCheck:
         return ip.startswith(_TRUSTED_PROXY_IPS_PREFIXES)
 
 
+from user_store import user_store
+
 _TRUSTED_PROXY_IPS = _TrustedProxyCheck()
 
 async def _verify_api_key_only(request: Request) -> str:
-    """API-key validation only — no rate limit. Base for both HMAC helpers."""
+    """API-key validation (static environment keys + dynamic user_store registry)."""
     api_key = request.headers.get("X-Ssense-API-Key")
-    if not api_key or api_key not in ALLOWED_API_KEYS:
+    if not api_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing X-Ssense-API-Key header.",
         )
+    is_valid = (api_key in ALLOWED_API_KEYS) or user_store.is_valid_api_key(api_key)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing X-Ssense-API-Key header.",
+        )
+
+    # Record client IP and activity for user tracking
+    client_ip = get_client_ip(request)
+    if user_store.is_valid_api_key(api_key):
+        await user_store.record_activity(api_key, client_ip, request.url.path)
+
     return api_key
 
 
 async def _verify_hmac_body(request: Request) -> bool:
-    """Shared HMAC verification + nonce-replay check. No rate limiting."""
+    """Shared HMAC verification + nonce-replay check with dynamic per-user secrets."""
     signature = request.headers.get("X-Ssense-Signature")
     timestamp = request.headers.get("X-Ssense-Timestamp")
     nonce = request.headers.get("X-Ssense-Nonce")
@@ -188,15 +202,31 @@ async def _verify_hmac_body(request: Request) -> bool:
         raise HTTPException(status_code=401, detail="Cryptographic nonce replay detected.")
 
     payload = f"{request.method.upper()}:{request.url.path}:{timestamp}:{nonce}"
+
+    # Resolve secret: check user_store first, fallback to SSENSE_HMAC_SECRET
+    api_key = request.headers.get("X-Ssense-API-Key", "")
+    user_secret = user_store.get_hmac_secret_for_key(api_key) if api_key else None
+    secret_to_use = user_secret or SSENSE_HMAC_SECRET
+
     expected = hmac.new(
-        SSENSE_HMAC_SECRET.encode("utf-8"),
+        secret_to_use.encode("utf-8"),
         payload.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
 
     if not hmac.compare_digest(expected, signature):
+        # Fallback check against shared server secret if user secret was tested
+        if secret_to_use != SSENSE_HMAC_SECRET:
+            shared_expected = hmac.new(
+                SSENSE_HMAC_SECRET.encode("utf-8"),
+                payload.encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+            if hmac.compare_digest(shared_expected, signature):
+                return True
         raise HTTPException(status_code=401, detail="Invalid HMAC signature.")
     return True
+
 
 
 async def verify_hmac_signature(request: Request) -> bool:

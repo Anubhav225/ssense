@@ -15,14 +15,18 @@ function formatDuration(ms: number): string {
 // ═══════════════════════════════════════════════════════════════
 // DESIGN SYSTEM
 // ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// DESIGN SYSTEM
+// ═══════════════════════════════════════════════════════════════
 export const DESIGN_SYSTEM_CSS = `
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
   :root {
     --ssense-bg-deep: #09090B;
     --ssense-bg-surface: #18181B;
     --ssense-bg-elevated: #27272A;
-    --ssense-border: rgba(255,255,255,0.06);
+    --ssense-border: rgba(255,255,255,0.07);
+    --ssense-border-strong: rgba(255,255,255,0.14);
     --ssense-text-primary: #FAFAFA;
     --ssense-text-secondary: #A1A1AA;
     --ssense-text-muted: #71717A;
@@ -33,105 +37,414 @@ export const DESIGN_SYSTEM_CSS = `
     --ssense-accent-amber: #F59E0B;
     --ssense-gradient-ai: linear-gradient(135deg, var(--ssense-accent-cyan) 0%, var(--ssense-accent-violet) 100%);
     --ssense-glass: rgba(255,255,255,0.02);
+    --ssense-header-bg: rgba(9,9,11,0.85);
+    --ssense-dock-bg: rgba(9,9,11,0.92);
+    --ssense-shadow-ambient: 0 4px 20px rgba(0,0,0,0.5);
   }
 
-  .ssense-root { font-family:'Inter',sans-serif; background:var(--ssense-bg-deep); color:var(--ssense-text-primary); height:100vh; width:100%; display:flex; flex-direction:column; overflow:hidden; position:relative; -webkit-font-smoothing:antialiased; }
-  .ssense-scroll::-webkit-scrollbar { width:6px; } .ssense-scroll::-webkit-scrollbar-track { background:transparent; } .ssense-scroll::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.08); border-radius:3px; }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --ssense-bg-deep: #FAFAFA;
+      --ssense-bg-surface: #FFFFFF;
+      --ssense-bg-elevated: #F4F4F5;
+      --ssense-border: rgba(0,0,0,0.08);
+      --ssense-border-strong: rgba(0,0,0,0.16);
+      --ssense-text-primary: #18181B;
+      --ssense-text-secondary: #52525B;
+      --ssense-text-muted: #71717A;
+      --ssense-accent-cyan: #0891B2;
+      --ssense-accent-violet: #7C3AED;
+      --ssense-accent-emerald: #059669;
+      --ssense-accent-rose: #E11D48;
+      --ssense-accent-amber: #D97706;
+      --ssense-gradient-ai: linear-gradient(135deg, #0891B2 0%, #7C3AED 100%);
+      --ssense-glass: rgba(0,0,0,0.02);
+      --ssense-header-bg: rgba(250,250,250,0.88);
+      --ssense-dock-bg: rgba(250,250,250,0.94);
+      --ssense-shadow-ambient: 0 4px 18px rgba(0,0,0,0.07);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  .ssense-root {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--ssense-bg-deep);
+    color: var(--ssense-text-primary);
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100dvh;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+    -webkit-font-smoothing: antialiased;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  .ssense-scroll::-webkit-scrollbar { width: 6px; }
+  .ssense-scroll::-webkit-scrollbar-track { background: transparent; }
+  .ssense-scroll::-webkit-scrollbar-thumb { background: rgba(120,120,128,0.22); border-radius: 3px; }
+  .ssense-scroll::-webkit-scrollbar-thumb:hover { background: rgba(120,120,128,0.38); }
+
   @keyframes ssense-fade-in-up { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
   @keyframes ssense-pulse { 0%,100%{opacity:.4;transform:scale(.8)} 50%{opacity:1;transform:scale(1.2)} }
-  .ssense-animate-in { animation:ssense-fade-in-up 0.3s cubic-bezier(0.16,1,0.3,1) forwards; }
-  .ssense-gradient-text { background:var(--ssense-gradient-ai); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
-  .ssense-thinking-dot { width:5px; height:5px; border-radius:50%; background:var(--ssense-accent-cyan); animation:ssense-pulse 1.4s infinite ease-in-out; }
+  .ssense-animate-in { animation: ssense-fade-in-up 0.25s cubic-bezier(0.16,1,0.3,1) forwards; }
+  .ssense-gradient-text { background: var(--ssense-gradient-ai); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .ssense-thinking-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ssense-accent-cyan); animation: ssense-pulse 1.4s infinite ease-in-out; }
 
-  .ssense-header { padding:12px 16px 0; display:flex; flex-direction:column; gap:10px; border-bottom:1px solid var(--ssense-border); z-index:10; position:relative; background:rgba(9,9,11,0.8); backdrop-filter:blur(12px); }
-  .ssense-header-top { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-  .ssense-header-left { display:flex; align-items:center; gap:12px; flex:1; min-width:0; }
-  .ssense-header-icon { width:32px; height:32px; border-radius:8px; flex-shrink:0; background:var(--ssense-gradient-ai); display:flex; align-items:center; justify-content:center; }
-  .ssense-header-info { flex:1; min-width:0; }
-  .ssense-domain { font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .ssense-badge { display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:12px; background:rgba(255,255,255,0.05); margin-top:4px; }
-  .ssense-badge-dot { width:6px; height:6px; border-radius:50%; }
+  .ssense-header {
+    padding: 12px 16px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    border-bottom: 1px solid var(--ssense-border);
+    z-index: 10;
+    position: relative;
+    background: var(--ssense-header-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+  .ssense-header-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .ssense-header-left { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
+  .ssense-header-icon {
+    width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0;
+    background: var(--ssense-gradient-ai);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 10px rgba(6,182,212,0.3);
+  }
+  .ssense-header-info { flex: 1; min-width: 0; }
+  .ssense-domain { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ssense-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 12px; background: var(--ssense-bg-elevated); border: 1px solid var(--ssense-border); margin-top: 4px; }
+  .ssense-badge-dot { width: 6px; height: 6px; border-radius: 50%; }
 
-  .ssense-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding-bottom:10px; }
-  .ssense-toolbar-btn { display:inline-flex; align-items:center; gap:5px; background:rgba(255,255,255,0.05); border:1px solid var(--ssense-border); color:var(--ssense-text-secondary); font-size:11px; font-weight:500; padding:5px 9px; border-radius:7px; cursor:pointer; transition:background .15s,color .15s,border-color .15s; white-space:nowrap; flex-shrink:0; }
-  .ssense-toolbar-btn:hover { background:rgba(255,255,255,0.09); color:var(--ssense-text-primary); border-color:rgba(255,255,255,0.14); }
-  .ssense-toolbar-btn:disabled { opacity:.4; cursor:default; }
-  .ssense-toolbar-btn--active { background:rgba(6,182,212,0.16); color:var(--ssense-accent-cyan); border-color:rgba(6,182,212,0.35); }
-  .ssense-toolbar-spacer { flex:1 1 auto; min-width:4px; }
+  .ssense-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 10px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    flex-wrap: nowrap;
+  }
+  .ssense-toolbar::-webkit-scrollbar { display: none; }
+  .ssense-toolbar-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: var(--ssense-bg-elevated);
+    border: 1px solid var(--ssense-border);
+    color: var(--ssense-text-secondary);
+    font-size: 11px; font-weight: 500; padding: 5px 9px;
+    border-radius: 7px; cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s;
+    white-space: nowrap; flex-shrink: 0;
+  }
+  .ssense-toolbar-btn:hover {
+    background: var(--ssense-bg-surface);
+    color: var(--ssense-text-primary);
+    border-color: var(--ssense-border-strong);
+  }
+  .ssense-toolbar-btn:disabled { opacity: .4; cursor: default; }
+  .ssense-toolbar-btn--active {
+    background: rgba(6,182,212,0.16);
+    color: var(--ssense-accent-cyan);
+    border-color: rgba(6,182,212,0.35);
+  }
+  .ssense-toolbar-spacer { flex: 1 1 auto; min-width: 4px; }
 
-  .ssense-audit-card { margin:16px 20px 0; border:1px solid var(--ssense-border); border-radius:12px; background:var(--ssense-glass); overflow:hidden; flex-shrink:0; z-index:10; position:relative; }
-  .ssense-audit-header { padding:12px 16px; display:flex; align-items:center; justify-content:space-between; cursor:pointer; user-select:none; }
-  .ssense-audit-header:hover { background:rgba(255,255,255,0.02); }
-  .ssense-audit-body { padding:0 16px 16px; border-top:1px solid var(--ssense-border); animation:ssense-fade-in-up .2s ease; display:flex; flex-direction:column; gap:12px; max-height:40vh; overflow-y:auto; }
-  .ssense-audit-body::-webkit-scrollbar { width:4px; } .ssense-audit-body::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.1); border-radius:2px; }
-  .ssense-audit-reasoning { font-size:12px; line-height:1.5; color:var(--ssense-text-secondary); margin:12px 0 0; font-style:italic; }
+  .ssense-audit-card {
+    margin: 14px 16px 0;
+    border: 1px solid var(--ssense-border);
+    border-radius: 12px;
+    background: var(--ssense-bg-surface);
+    box-shadow: var(--ssense-shadow-ambient);
+    overflow: hidden;
+    flex-shrink: 0;
+    z-index: 10;
+    position: relative;
+  }
+  .ssense-audit-header {
+    padding: 12px 14px;
+    display: flex; align-items: center; justify-content: space-between;
+    cursor: pointer; user-select: none;
+    transition: background 0.15s ease;
+  }
+  .ssense-audit-header:hover { background: var(--ssense-bg-elevated); }
+  .ssense-audit-body {
+    padding: 0 14px 14px;
+    border-top: 1px solid var(--ssense-border);
+    animation: ssense-fade-in-up .2s ease;
+    display: flex; flex-direction: column; gap: 12px;
+    max-height: min(40vh, 280px);
+    overflow-y: auto;
+  }
+  .ssense-audit-body::-webkit-scrollbar { width: 4px; }
+  .ssense-audit-body::-webkit-scrollbar-thumb { background: rgba(120,120,128,0.25); border-radius: 2px; }
+  .ssense-audit-reasoning { font-size: 12px; line-height: 1.55; color: var(--ssense-text-secondary); margin: 10px 0 0; font-style: italic; }
 
-  .ssense-violation-card { background:var(--ssense-bg-surface); border:1px solid var(--ssense-border); border-radius:10px; padding:12px; display:flex; flex-direction:column; gap:8px; }
-  .ssense-violation-top { display:flex; justify-content:space-between; align-items:center; }
-  .ssense-violation-type { color:var(--ssense-accent-rose); font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; padding:4px 8px; background:rgba(244,63,94,0.1); border-radius:6px; }
-  .ssense-violation-action { color:var(--ssense-text-secondary); font-size:11px; font-weight:600; }
-  .ssense-evidence { margin:0; padding:8px 12px; border-left:2px solid var(--ssense-accent-rose); background:rgba(244,63,94,0.04); border-radius:0 6px 6px 0; font-size:11.5px; line-height:1.5; font-style:italic; cursor:pointer; }
-  .ssense-entities-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; }
-  .ssense-entity-tag { font-size:10px; font-family:'JetBrains Mono',monospace; padding:2px 6px; border-radius:4px; background:var(--ssense-bg-elevated); color:var(--ssense-text-secondary); border:1px solid var(--ssense-border); }
+  .ssense-violation-card {
+    background: var(--ssense-bg-elevated);
+    border: 1px solid var(--ssense-border);
+    border-radius: 10px; padding: 12px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .ssense-violation-top { display: flex; justify-content: space-between; align-items: center; }
+  .ssense-violation-type {
+    color: var(--ssense-accent-rose); font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .05em; padding: 3px 7px;
+    background: rgba(244,63,94,0.12); border-radius: 6px;
+  }
+  .ssense-violation-action { color: var(--ssense-text-secondary); font-size: 10.5px; font-weight: 600; }
+  .ssense-evidence {
+    margin: 0; padding: 8px 12px; border-left: 2px solid var(--ssense-accent-rose);
+    background: rgba(244,63,94,0.05); border-radius: 0 6px 6px 0;
+    font-size: 11.5px; line-height: 1.5; font-style: italic; cursor: pointer;
+  }
+  .ssense-entities-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+  .ssense-entity-tag {
+    font-size: 10px; font-family: 'JetBrains Mono', monospace; padding: 2px 6px;
+    border-radius: 4px; background: var(--ssense-bg-surface);
+    color: var(--ssense-text-secondary); border: 1px solid var(--ssense-border);
+  }
 
-  .ssense-stream { flex:1; overflow-y:auto; padding:24px 20px; display:flex; flex-direction:column; gap:24px; z-index:10; position:relative; }
-  .ssense-empty-state { text-align:center; margin-top:15%; opacity:.9; }
-  .ssense-quick-prompts { display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-top:24px; }
-  .ssense-quick-prompt { padding:8px 14px; border-radius:8px; font-size:12px; font-weight:500; color:var(--ssense-text-secondary); cursor:pointer; transition:all .2s; white-space:nowrap; border:1px solid var(--ssense-border); background:transparent; font-family:inherit; }
-  .ssense-quick-prompt:hover { border-color:var(--ssense-accent-cyan); color:var(--ssense-text-primary); background:rgba(6,182,212,0.05); }
+  .ssense-stream {
+    flex: 1; overflow-y: auto; padding: 20px 16px;
+    display: flex; flex-direction: column; gap: 20px;
+    z-index: 10; position: relative;
+  }
+  .ssense-empty-state { text-align: center; margin-top: 10%; opacity: .95; }
+  .ssense-quick-prompts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 20px; }
+  .ssense-quick-prompt {
+    padding: 7px 12px; border-radius: 8px; font-size: 11.5px; font-weight: 500;
+    color: var(--ssense-text-secondary); cursor: pointer; transition: all .15s;
+    white-space: nowrap; border: 1px solid var(--ssense-border);
+    background: var(--ssense-bg-surface); font-family: inherit;
+  }
+  .ssense-quick-prompt:hover {
+    border-color: var(--ssense-accent-cyan);
+    color: var(--ssense-text-primary);
+    background: rgba(6,182,212,0.06);
+  }
 
-  .ssense-msg { display:flex; max-width:100%; }
-  .ssense-msg-user { justify-content:flex-end; }
-  .ssense-msg-bubble { padding:10px 16px; font-size:13.5px; line-height:1.6; max-width:85%; white-space:pre-wrap; word-break:break-word; }
-  .ssense-msg-bubble.user { border-radius:16px 16px 4px 16px; background:var(--ssense-bg-elevated); }
-  .ssense-msg-bubble.ai { border-radius:16px 16px 16px 4px; background:var(--ssense-glass); border:1px solid var(--ssense-border); }
-  .ssense-msg-header { display:flex; align-items:center; gap:6px; margin-bottom:10px; font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
-  .ssense-msg-header-dot { width:4px; height:4px; border-radius:50%; background:var(--ssense-accent-cyan); }
-  .ssense-inline-code { background:rgba(255,255,255,.08); padding:2px 6px; border-radius:4px; font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--ssense-accent-cyan); }
+  .ssense-msg { display: flex; max-width: 100%; }
+  .ssense-msg-user { justify-content: flex-end; }
+  .ssense-msg-bubble {
+    padding: 10px 14px; font-size: 13px; line-height: 1.6;
+    max-width: 88%; word-break: break-word;
+  }
+  .ssense-msg-bubble.user {
+    border-radius: 16px 16px 4px 16px;
+    background: var(--ssense-bg-elevated);
+    border: 1px solid var(--ssense-border);
+  }
+  .ssense-msg-bubble.ai {
+    border-radius: 16px 16px 16px 4px;
+    background: var(--ssense-bg-surface);
+    border: 1px solid var(--ssense-border);
+    box-shadow: var(--ssense-shadow-ambient);
+  }
+  .ssense-msg-header {
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 8px; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .05em;
+  }
+  .ssense-msg-header-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ssense-accent-cyan); }
+  .ssense-inline-code {
+    background: rgba(120,120,128,0.15); padding: 2px 5px; border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--ssense-accent-cyan);
+  }
 
-  .ssense-input-dock { padding:16px 20px 24px; border-top:1px solid var(--ssense-border); z-index:10; position:relative; background:rgba(9,9,11,0.9); backdrop-filter:blur(12px); }
-  .ssense-input-container { display:flex; align-items:center; padding:4px 4px 4px 20px; border-radius:16px; border:1px solid var(--ssense-border); background:var(--ssense-bg-surface); transition:border-color .2s,box-shadow .2s; }
-  .ssense-input-container:focus-within { border-color:rgba(6,182,212,0.5); box-shadow:0 0 0 2px rgba(6,182,212,0.15); }
-  .ssense-input-field { flex:1; background:transparent; border:none; outline:none; color:var(--ssense-text-primary); font-family:inherit; font-size:14px; padding:12px 0; }
-  .ssense-input-field::placeholder { color:var(--ssense-text-muted); }
-  .ssense-send-btn { width:36px; height:36px; border-radius:12px; border:none; flex-shrink:0; background:transparent; color:var(--ssense-text-muted); cursor:not-allowed; display:flex; align-items:center; justify-content:center; transition:all .2s; transform:scale(0.9); }
-  .ssense-send-btn.active { background:var(--ssense-gradient-ai); color:#fff; cursor:pointer; transform:scale(1); }
+  .ssense-input-dock {
+    padding: 14px 16px 20px;
+    border-top: 1px solid var(--ssense-border);
+    z-index: 10; position: relative;
+    background: var(--ssense-dock-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+  .ssense-input-container {
+    display: flex; align-items: center; padding: 4px 4px 4px 16px;
+    border-radius: 14px; border: 1px solid var(--ssense-border);
+    background: var(--ssense-bg-surface);
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .ssense-input-container:focus-within {
+    border-color: rgba(6,182,212,0.5);
+    box-shadow: 0 0 0 2px rgba(6,182,212,0.15);
+  }
+  .ssense-input-field {
+    flex: 1; background: transparent; border: none; outline: none;
+    color: var(--ssense-text-primary); font-family: inherit; font-size: 13.5px;
+    padding: 10px 0; min-width: 0;
+  }
+  .ssense-input-field::placeholder { color: var(--ssense-text-muted); }
+  .ssense-send-btn {
+    width: 34px; height: 34px; border-radius: 10px; border: none;
+    flex-shrink: 0; background: transparent; color: var(--ssense-text-muted);
+    cursor: not-allowed; display: flex; align-items: center; justify-content: center;
+    transition: all .2s; transform: scale(0.9);
+  }
+  .ssense-send-btn.active {
+    background: var(--ssense-gradient-ai); color: #fff;
+    cursor: pointer; transform: scale(1);
+    box-shadow: 0 2px 8px rgba(6,182,212,0.3);
+  }
 
-  .ssense-service-banner { border-bottom:1px solid rgba(244,63,94,0.3); padding:10px 20px; display:flex; align-items:center; gap:10px; color:var(--ssense-accent-rose); font-size:12px; font-weight:500; z-index:20; background:rgba(244,63,94,0.07); }
+  .ssense-service-banner {
+    border-bottom: 1px solid rgba(244,63,94,0.3); padding: 8px 16px;
+    display: flex; align-items: center; gap: 8px; color: var(--ssense-accent-rose);
+    font-size: 11.5px; font-weight: 500; z-index: 20; background: rgba(244,63,94,0.08);
+  }
 
-  .ssense-shield-panel { border-bottom:1px solid var(--ssense-border); padding:12px 16px; font-size:11px; display:flex; flex-direction:column; gap:8px; background:var(--ssense-bg-surface); z-index:10; }
-  .ssense-shield-row { display:flex; justify-content:space-between; align-items:center; cursor:pointer; color:var(--ssense-text-secondary); }
-  .ssense-branding { text-align:center; margin-top:12px; font-size:10px; color:var(--ssense-text-muted); letter-spacing:.03em; }
+  .ssense-shield-panel {
+    border-bottom: 1px solid var(--ssense-border); padding: 12px 16px;
+    font-size: 11px; display: flex; flex-direction: column; gap: 8px;
+    background: var(--ssense-bg-surface); z-index: 10;
+  }
+  .ssense-shield-row {
+    display: flex; justify-content: space-between; align-items: center;
+    cursor: pointer; color: var(--ssense-text-secondary);
+  }
+  .ssense-shield-row input { accent-color: var(--ssense-accent-cyan); }
+  .ssense-branding {
+    text-align: center; margin-top: 10px; font-size: 10px;
+    color: var(--ssense-text-muted); letter-spacing: .03em;
+  }
 
-  /* Regular / Thinking segmented control — a clear two-state switch rather
-     than a single toggle button, so both modes are always visible and the
-     active one is unambiguous at a glance. */
-  .ssense-mode-switch { display:inline-flex; align-items:center; background:rgba(255,255,255,0.04); border:1px solid var(--ssense-border); border-radius:9px; padding:2px; gap:2px; flex-shrink:0; }
-  .ssense-mode-option { display:inline-flex; align-items:center; gap:4px; border:none; background:transparent; color:var(--ssense-text-muted); font-size:10.5px; font-weight:600; padding:5px 9px; border-radius:7px; cursor:pointer; transition:background .15s,color .15s; white-space:nowrap; }
-  .ssense-mode-option:hover { color:var(--ssense-text-secondary); }
-  .ssense-mode-option--active { background:var(--ssense-bg-elevated); color:var(--ssense-text-primary); box-shadow:0 1px 2px rgba(0,0,0,0.3); }
-  .ssense-mode-option--active.ssense-mode-thinking { color:var(--ssense-accent-violet); }
-  .ssense-mode-option--active.ssense-mode-concise { color:var(--ssense-accent-cyan); }
+  .ssense-mode-switch {
+    display: inline-flex; align-items: center;
+    background: var(--ssense-bg-elevated);
+    border: 1px solid var(--ssense-border);
+    border-radius: 9px; padding: 2px; gap: 2px; flex-shrink: 0;
+  }
+  .ssense-mode-option {
+    display: inline-flex; align-items: center; gap: 4px; border: none;
+    background: transparent; color: var(--ssense-text-muted);
+    font-size: 10.5px; font-weight: 600; padding: 4px 8px; border-radius: 7px;
+    cursor: pointer; transition: background .15s, color .15s; white-space: nowrap;
+  }
+  .ssense-mode-option:hover { color: var(--ssense-text-secondary); }
+  .ssense-mode-option--active {
+    background: var(--ssense-bg-surface);
+    color: var(--ssense-text-primary);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  }
+  .ssense-mode-option--active.ssense-mode-thinking { color: var(--ssense-accent-violet); }
+  .ssense-mode-option--active.ssense-mode-concise { color: var(--ssense-accent-cyan); }
 
-  /* Chat quota chip — subtle by default, warns as it runs low. Never shown
-     for audits, which are unlimited. */
-  .ssense-quota-chip { font-size:9.5px; font-weight:600; color:var(--ssense-text-muted); padding:3px 8px; border-radius:10px; background:rgba(255,255,255,0.03); border:1px solid var(--ssense-border); white-space:nowrap; }
-  .ssense-quota-chip--low { color:var(--ssense-accent-amber); background:rgba(245,158,11,0.08); border-color:rgba(245,158,11,0.25); }
+  .ssense-quota-chip {
+    font-size: 9.5px; font-weight: 600; color: var(--ssense-text-muted);
+    padding: 3px 8px; border-radius: 10px; background: var(--ssense-bg-elevated);
+    border: 1px solid var(--ssense-border); white-space: nowrap;
+  }
+  .ssense-quota-chip--low {
+    color: var(--ssense-accent-amber);
+    background: rgba(245,158,11,0.1);
+    border-color: rgba(245,158,11,0.3);
+  }
 
-  .ssense-cooldown-banner { margin:12px 20px 0; padding:12px 14px; border-radius:10px; border:1px solid rgba(245,158,11,0.25); background:rgba(245,158,11,0.06); display:flex; flex-direction:column; gap:4px; }
-  .ssense-cooldown-title { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:600; color:var(--ssense-accent-amber); }
-  .ssense-cooldown-sub { font-size:11px; color:var(--ssense-text-secondary); line-height:1.5; }
+  .ssense-cooldown-banner {
+    margin: 10px 16px 0; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid rgba(245,158,11,0.25); background: rgba(245,158,11,0.06);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .ssense-cooldown-title { display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 600; color: var(--ssense-accent-amber); }
+  .ssense-cooldown-sub { font-size: 10.5px; color: var(--ssense-text-secondary); line-height: 1.5; }
+
+  /* Responsive tweaks for narrow panels (<=360px) and mobile viewports */
+  @media (max-width: 360px) {
+    .ssense-header { padding: 10px 12px 0; }
+    .ssense-toolbar { gap: 4px; padding-bottom: 8px; }
+    .ssense-toolbar-btn { font-size: 10px; padding: 4px 7px; }
+    .ssense-mode-option { font-size: 10px; padding: 3px 6px; }
+    .ssense-stream { padding: 14px 12px; gap: 14px; }
+    .ssense-msg-bubble { max-width: 92%; font-size: 12.5px; padding: 8px 12px; }
+    .ssense-input-dock { padding: 10px 12px 16px; }
+    .ssense-audit-card { margin: 10px 12px 0; }
+    .ssense-audit-body { max-height: min(38vh, 250px); }
+  }
 `;
 
-// ─── Markdown tokenizer (CSP-safe, no dangerouslySetInnerHTML) ───────────────
-const parseMarkdown = (text: string): React.ReactNode[] =>
-  text.split(/(`.*?`|\*\*.*?\*\*|\*.*?\*|\n)/g).map((part, i) => {
-    if (part === '\n') return <br key={i} />;
-    if (part.startsWith('`') && part.endsWith('`')) return <code key={i} className="ssense-inline-code">{part.slice(1,-1)}</code>;
-    if (part.startsWith('**') && part.endsWith('**')) return <strong key={i}>{part.slice(2,-2)}</strong>;
-    if (part.startsWith('*') && part.endsWith('*')) return <em key={i}>{part.slice(1,-1)}</em>;
-    return <React.Fragment key={i}>{part}</React.Fragment>;
+// ─── Markdown tokenizer (CSP-safe, line-aware, no dangerouslySetInnerHTML) ──
+const parseInlineMarkdown = (line: string, lineKey: string | number): React.ReactNode[] => {
+  return line.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g).map((part, i) => {
+    const key = `${lineKey}-${i}`;
+    if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
+      return <code key={key} className="ssense-inline-code">{part.slice(1, -1)}</code>;
+    }
+    if (part.startsWith('**') && part.endsWith('**') && part.length >= 4) {
+      return <strong key={key}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith('*') && part.endsWith('*') && part.length >= 2) {
+      return <em key={key}>{part.slice(1, -1)}</em>;
+    }
+    return <React.Fragment key={key}>{part}</React.Fragment>;
   });
+};
+
+const parseMarkdown = (text: string): React.ReactNode[] => {
+  const lines = text.split('\n');
+  return lines.map((line, idx) => {
+    if (!line.trim()) {
+      return <div key={idx} style={{ height: 6 }} />;
+    }
+    if (line.trim() === '---' || line.trim() === '***') {
+      return <hr key={idx} style={{ border: 'none', borderTop: '1px solid var(--ssense-border)', margin: '8px 0' }} />;
+    }
+    if (line.startsWith('### ')) {
+      return (
+        <div key={idx} style={{ fontSize: 13, fontWeight: 700, margin: '6px 0 2px', color: 'var(--ssense-text-primary)' }}>
+          {parseInlineMarkdown(line.slice(4), idx)}
+        </div>
+      );
+    }
+    if (line.startsWith('## ')) {
+      return (
+        <div key={idx} style={{ fontSize: 14, fontWeight: 700, margin: '8px 0 3px', color: 'var(--ssense-text-primary)' }}>
+          {parseInlineMarkdown(line.slice(3), idx)}
+        </div>
+      );
+    }
+    if (line.startsWith('# ')) {
+      return (
+        <div key={idx} style={{ fontSize: 15, fontWeight: 800, margin: '10px 0 4px', color: 'var(--ssense-text-primary)' }}>
+          {parseInlineMarkdown(line.slice(2), idx)}
+        </div>
+      );
+    }
+    if (line.startsWith('> ')) {
+      return (
+        <blockquote key={idx} style={{ margin: '4px 0', padding: '4px 10px', borderLeft: '2px solid var(--ssense-accent-cyan)', background: 'rgba(6,182,212,0.05)', borderRadius: '0 6px 6px 0', fontSize: 12.5, fontStyle: 'italic', color: 'var(--ssense-text-secondary)' }}>
+          {parseInlineMarkdown(line.slice(2), idx)}
+        </blockquote>
+      );
+    }
+    if (/^[\*\-]\s+/.test(line)) {
+      const content = line.replace(/^[\*\-]\s+/, '');
+      return (
+        <div key={idx} style={{ display: 'flex', gap: 6, margin: '2px 0', paddingLeft: 4 }}>
+          <span style={{ color: 'var(--ssense-accent-cyan)', fontWeight: 700, flexShrink: 0 }}>•</span>
+          <span style={{ flex: 1 }}>{parseInlineMarkdown(content, idx)}</span>
+        </div>
+      );
+    }
+    const numMatch = line.match(/^(\d+)\.\s+(.*)$/);
+    if (numMatch) {
+      return (
+        <div key={idx} style={{ display: 'flex', gap: 6, margin: '2px 0', paddingLeft: 4 }}>
+          <span style={{ color: 'var(--ssense-accent-cyan)', fontWeight: 600, fontSize: 12, minWidth: 16, flexShrink: 0 }}>{numMatch[1]}.</span>
+          <span style={{ flex: 1 }}>{parseInlineMarkdown(numMatch[2], idx)}</span>
+        </div>
+      );
+    }
+    return (
+      <div key={idx} style={{ margin: '1px 0' }}>
+        {parseInlineMarkdown(line, idx)}
+      </div>
+    );
+  });
+};
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 const ComplianceBadge = ({ score, delta }: { score: number | null; delta?: number | null }) => {
@@ -750,15 +1063,16 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
                 style={{
                   display:'flex', alignItems:'center', gap:6, padding:'5px 9px', borderRadius:8,
                   fontSize:11, fontWeight:600, cursor: active ? 'default' : 'pointer',
-                  background: active ? 'rgba(6,182,212,0.16)' : 'rgba(255,255,255,0.04)',
+                  background: active ? 'rgba(6,182,212,0.16)' : 'var(--ssense-bg-elevated)',
                   color: active ? 'var(--ssense-accent-cyan)' : 'var(--ssense-text-secondary)',
                   border: `1px solid ${active ? 'rgba(6,182,212,0.35)' : 'var(--ssense-border)'}`,
                   opacity: !active && activeSite ? 0.6 : 1,
+                  maxWidth: 160,
                 }}
               >
                 {s.pinned && <span style={{ fontSize:9 }}>📌</span>}
                 {s.unread && !active && <span style={{ width:6, height:6, borderRadius:'50%', background:'var(--ssense-accent-rose)', flexShrink:0 }} />}
-                <span>{s.domain}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.domain}</span>
                 <span
                   onClick={e => { e.stopPropagation(); togglePinThread(s.domain); }}
                   style={{ opacity:0.6, fontSize:9, cursor:'pointer' }}
@@ -787,7 +1101,7 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
         <div style={{ margin:'8px 20px 0', display:'flex', alignItems:'center', gap:8 }}>
           <button
             onClick={() => selectThread(domain)}
-            style={{ fontSize:11, fontWeight:600, padding:'6px 10px', borderRadius:8, border:'1px solid var(--ssense-border)', background:'rgba(255,255,255,0.04)', color:'var(--ssense-text-secondary)', cursor:'pointer' }}
+            style={{ fontSize:11, fontWeight:600, padding:'6px 10px', borderRadius:8, border:'1px solid var(--ssense-border)', background:'var(--ssense-bg-elevated)', color:'var(--ssense-text-secondary)', cursor:'pointer' }}
           >
             {viewedIsQueued ? `↳ Switch chat to ${domain}` : `＋ Start chat about ${domain}`}
           </button>
@@ -808,7 +1122,7 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
       {/* Shield panel */}
       {showShield && (
         <div className="ssense-shield-panel">
-          <div style={{ display:'flex', justifyContent:'space-between', fontWeight:600, color:'#fff' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', fontWeight:600, color:'var(--ssense-text-primary)' }}>
             <span>Active Protection</span>
             <span style={{ fontSize:10, color:'var(--ssense-accent-cyan)', cursor:'pointer' }} onClick={() => setShowShield(false)}>✕</span>
           </div>
@@ -861,10 +1175,10 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
               )}
 
               {/* Score row */}
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', background:'rgba(255,255,255,0.03)', padding:8, borderRadius:6, border:'1px solid rgba(255,255,255,0.05)' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', background:'var(--ssense-bg-elevated)', padding:8, borderRadius:6, border:'1px solid var(--ssense-border)' }}>
                 <div><div style={{ fontSize:10, color:'var(--ssense-text-muted)' }}>Trust Score</div><div style={{ fontSize:14, fontWeight:700, color:'var(--ssense-accent-cyan)' }}>{auditReport.dpdp_trust_score} / 100</div></div>
                 <div><div style={{ fontSize:10, color:'var(--ssense-text-muted)' }}>Subtlety</div><div style={{ fontSize:14, fontWeight:700, color:'var(--ssense-accent-violet)' }} title="Legal obfuscation score — higher means more complex evasive language">{auditReport.subtlety_score} / 100</div></div>
-                <button onClick={e => { e.stopPropagation(); exportAuditReport(); }} style={{ background:'var(--ssense-gradient-ai)', border:'none', color:'#000', fontWeight:600, fontSize:10, padding:'4px 10px', borderRadius:6, cursor:'pointer' }}>Export</button>
+                <button onClick={e => { e.stopPropagation(); exportAuditReport(); }} style={{ background:'var(--ssense-gradient-ai)', border:'none', color:'#fff', fontWeight:600, fontSize:10, padding:'4px 10px', borderRadius:6, cursor:'pointer' }}>Export</button>
               </div>
 
               <p className="ssense-audit-reasoning">{auditReport.global_legal_reasoning}</p>

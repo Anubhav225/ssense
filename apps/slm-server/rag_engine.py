@@ -382,6 +382,7 @@ class AsyncHybridRAG:
         query: str,
         top_k: int = 5,
         confidence_threshold: float = -5.0,
+        rerank_depth: int = 25,
     ) -> Tuple[str, List[Dict[str, Any]]]:
         """
         Hybrid retrieval with automatic state-query detection.
@@ -403,7 +404,7 @@ class AsyncHybridRAG:
         loop     = asyncio.get_running_loop()
         hits     = await loop.run_in_executor(
             self.thread_pool, self._sync_retrieve, query, top_k,
-            50, 25, 60, is_state,
+            50, rerank_depth, 60, is_state,
         )
 
         if not hits:

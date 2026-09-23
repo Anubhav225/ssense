@@ -36,16 +36,31 @@ export interface ServerConfig { url: string; apiKey: string; hmacSecret: string;
  * fully configured out of the box against the baked-in shared server.
  */
 export async function getServerConfig(): Promise<ServerConfig> {
-  const d = await chrome.storage.local.get(['ssense_override_enabled', 'ssense_server_url', 'ssense_api_key', 'ssense_hmac_secret']);
-  if (d.ssense_override_enabled && d.ssense_server_url && d.ssense_api_key && d.ssense_hmac_secret) {
-    return { url: d.ssense_server_url, apiKey: d.ssense_api_key, hmacSecret: d.ssense_hmac_secret, configured: true, isOverride: true };
-  }
+  const d = await chrome.storage.local.get([
+    'ssense_override_enabled',
+    'ssense_server_url',
+    'ssense_api_key',
+    'ssense_hmac_secret',
+    'ssense_device_id',
+    'ssense_user_name',
+    'ssense_user_email',
+  ]);
+
+  // Active server URL: explicit override > storage custom > environment variable (BAKED_SERVER_URL)
+  const effectiveUrl = (d.ssense_override_enabled && d.ssense_server_url)
+    ? d.ssense_server_url.trim().replace(/\/$/, '')
+    : (d.ssense_server_url?.trim().replace(/\/$/, '') || BAKED_SERVER_URL.trim().replace(/\/$/, ''));
+
+  // Active credentials: dynamic issued credentials in storage > baked environment credentials
+  const apiKey = (d.ssense_api_key && d.ssense_api_key.trim()) || BAKED_API_KEY;
+  const hmacSecret = (d.ssense_hmac_secret && d.ssense_hmac_secret.trim()) || BAKED_HMAC_SECRET;
+
   return {
-    url:        BAKED_SERVER_URL,
-    apiKey:     BAKED_API_KEY,
-    hmacSecret: BAKED_HMAC_SECRET,
-    configured: Boolean(BAKED_API_KEY && BAKED_HMAC_SECRET),
-    isOverride: false,
+    url: effectiveUrl,
+    apiKey,
+    hmacSecret,
+    configured: Boolean(apiKey && hmacSecret),
+    isOverride: Boolean(d.ssense_override_enabled),
   };
 }
 export { getServerConfig as getRouterConfig };  // legacy alias
@@ -298,5 +313,160 @@ export async function executeChat(
   } catch(e) {
     const err=wrap(e,'Chat failed.'); onChunk?.('',true);
     return {type:'ERROR',requestId,success:false,error:err.message,errorKind:err.kind,retryable:err.retryable,rateLimit:(e as SsenseError)?.rateLimit};
+  }
+}
+
+// ─── Handshake & Authentication Discovery ──────────────────────────────────
+export interface ServerPingResult {
+  online: boolean;
+  service?: string;
+  version?: string;
+  authRequired?: boolean;
+  registrationOpen?: boolean;
+  requiresInvite?: boolean;
+  publicUrl?: string;
+  error?: string;
+}
+
+export async function fetchServerPing(targetUrl?: string): Promise<ServerPingResult> {
+  const cfg = await getServerConfig();
+  const baseUrl = targetUrl ? targetUrl.trim().replace(/\/$/, '') : cfg.url;
+  try {
+    const res = await fetch(`${baseUrl}/v1/auth/ping`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+    });
+    if (!res.ok) {
+      return { online: false, error: `HTTP ${res.status}: ${res.statusText}` };
+    }
+    const data = await res.json();
+    return {
+      online: data.status === 'online',
+      service: data.service,
+      version: data.version,
+      authRequired: data.auth_required,
+      registrationOpen: data.registration_open,
+      requiresInvite: data.requires_invite,
+      publicUrl: data.public_url,
+    };
+  } catch (err: any) {
+    return { online: false, error: err?.message || 'Failed to connect to server' };
+  }
+}
+
+export interface RegisterResult {
+  success: boolean;
+  userId?: string;
+  apiKey?: string;
+  deviceId?: string;
+  userName?: string;
+  userEmail?: string;
+  googleId?: string;
+  avatarUrl?: string;
+  error?: string;
+}
+
+export async function registerDevice(
+  name?: string,
+  email?: string,
+  deviceName?: string,
+  inviteCode?: string,
+  googleId?: string,
+  avatarUrl?: string,
+): Promise<RegisterResult> {
+  const cfg = await getServerConfig();
+  const stored = await chrome.storage.local.get(['ssense_device_id']);
+  const deviceId = stored.ssense_device_id || `dev_${crypto.randomUUID().slice(0, 12)}`;
+
+  const payload = {
+    name: name?.trim() || undefined,
+    email: email?.trim() || undefined,
+    google_id: googleId?.trim() || undefined,
+    avatar_url: avatarUrl?.trim() || undefined,
+    device_name: deviceName?.trim() || (typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows') ? 'Windows Laptop' : 'Laptop Client'),
+    device_id: deviceId,
+    platform: typeof navigator !== 'undefined' ? navigator.userAgent.slice(0, 50) : 'Chrome Extension',
+    invite_code: inviteCode?.trim() || undefined,
+  };
+
+  try {
+    const res = await fetch(`${cfg.url}/v1/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      let errMsg = `Registration failed (HTTP ${res.status})`;
+      try {
+        const errJson = await res.json();
+        if (errJson?.detail) errMsg = errJson.detail;
+      } catch {}
+      return { success: false, error: errMsg };
+    }
+
+    const data = await res.json();
+    const finalName = data.display_name || name || 'Guest Reviewer';
+    const finalEmail = data.email || email;
+    const finalGoogleId = data.google_id || googleId;
+    const finalAvatar = data.avatar_url || avatarUrl;
+
+    await chrome.storage.local.set({
+      ssense_api_key: data.api_key,
+      ssense_hmac_secret: data.hmac_secret,
+      ssense_user_id: data.user_id,
+      ssense_device_id: data.device_id,
+      ssense_user_name: finalName,
+      ssense_user_email: finalEmail,
+      ssense_google_id: finalGoogleId,
+      ssense_avatar_url: finalAvatar,
+      ssense_onboarded: true,
+    });
+
+    return {
+      success: true,
+      userId: data.user_id,
+      apiKey: data.api_key,
+      deviceId: data.device_id,
+      userName: finalName,
+      userEmail: finalEmail,
+      googleId: finalGoogleId,
+      avatarUrl: finalAvatar,
+    };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Network error during registration' };
+  }
+}
+
+export async function sendHeartbeat(): Promise<boolean> {
+  const cfg = await getServerConfig();
+  if (!cfg.configured) return false;
+  try {
+    const headers = await signedHeaders(cfg, 'POST', '/v1/auth/heartbeat');
+    const stored = await chrome.storage.local.get(['ssense_device_id']);
+    const res = await fetch(`${cfg.url}/v1/auth/heartbeat`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ device_id: stored.ssense_device_id }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchUserProfile(): Promise<any> {
+  const cfg = await getServerConfig();
+  if (!cfg.configured) return null;
+  try {
+    const headers = await signedHeaders(cfg, 'GET', '/v1/auth/me');
+    const res = await fetch(`${cfg.url}/v1/auth/me`, {
+      method: 'GET',
+      headers,
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
   }
 }

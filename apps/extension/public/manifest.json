@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Ssense — DPDP Privacy Shield",
   "short_name": "Ssense",
-  "version": "2.3.0",
-  "version_name": "2.3.0 (Secure Zero-Config)",
+  "version": "1.0.0",
+  "version_name": "1.0.0 (General Release)",
   "description": "Instant DPDP Act 2023 compliance auditing for every site you visit. AI-powered trust scoring, violation detection, and a live legal co-pilot. Zero setup — works the moment you install.",
   "author": "Ssense Engineering",
   "homepage_url": "https://ssense.app",
@@ -12,7 +12,8 @@
     "storage",
     "scripting",
     "tabs",
-    "notifications"
+    "notifications",
+    "identity"
   ],
   "host_permissions": [
     "<all_urls>"

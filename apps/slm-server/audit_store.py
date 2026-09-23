@@ -72,28 +72,24 @@ class AuditStore:
         self._write_lock = asyncio.Lock()
         # In-memory hot cache for get_chat_context: domain -> (context, cached_timestamp)
         self._chat_context_cache: Dict[str, Tuple[str, float]] = {}
+        # In-memory set of all known audited domain keys for O(1) domain resolution
+        self._known_domains: Set[str] = set()
 
     async def find_audited_domain_by_name(self, name: str) -> Optional[str]:
-        """Finds if a brand name or prefix matches an audited domain (e.g. 'zomato' -> 'zomato.com')."""
+        """Finds if a brand name or prefix matches an audited domain (e.g. 'zomato' -> 'zomato.com').
+        Uses in-memory set to eliminate 120+ sequential SQLite queries per chat request."""
         name_clean = name.strip().lower()
         if not name_clean or len(name_clean) < 3:
             return None
-        # Check direct common TLDs first
+        await self._ensure_db()
+        # Fast O(1) in-memory check against known audited domains
         for tld in (".com", ".in", ".org", ".co.in", ".io", ".net", ".ai"):
             candidate = f"{name_clean}{tld}"
-            row = await self._fetch_row(candidate)
-            if row:
+            if candidate in self._known_domains:
                 return candidate
-        # Check prefix match in SQLite
-        await self._ensure_db()
-        if self._db:
-            cur = await self._db.execute(
-                "SELECT domain_key FROM audit_cache WHERE domain_key LIKE ? LIMIT 1",
-                (f"{name_clean}.%",)
-            )
-            row = await cur.fetchone()
-            if row:
-                return row["domain_key"]
+        for d in self._known_domains:
+            if d.startswith(f"{name_clean}."):
+                return d
         return None
 
     async def _ensure_db(self) -> None:
@@ -143,8 +139,12 @@ class AuditStore:
                 pass   # column already exists
 
         await self._db.commit()
+        # Populate in-memory set of known domains for instant O(1) matching
+        cur = await self._db.execute("SELECT domain_key FROM audit_cache")
+        rows = await cur.fetchall()
+        self._known_domains = {r["domain_key"] for r in rows}
         self._prune_task = asyncio.create_task(self._background_pruner())
-        print(f"✅ [AuditStore] Persistent cache initialised → {self._db_path}")
+        print(f"✅ [AuditStore] Persistent cache initialised ({len(self._known_domains)} domains) → {self._db_path}")
 
     async def close(self) -> None:
         if self._prune_task:
@@ -186,8 +186,7 @@ class AuditStore:
         try:
             report = json.loads(row["report_json"])
         except json.JSONDecodeError:
-            async with self._write_lock:
-                await self._delete_row(key)
+            await self.delete(key)
             return None
 
         meta = {
@@ -277,7 +276,8 @@ class AuditStore:
                 )
             await self._db.commit()
 
-        # Update hot memory cache
+        # Update hot memory cache and known domains set
+        self._known_domains.add(key)
         if chat_context:
             self._chat_context_cache[key] = (chat_context, now)
 
@@ -287,6 +287,7 @@ class AuditStore:
         await self._ensure_db()
         key = _normalise(domain)
         self._chat_context_cache.pop(key, None)
+        self._known_domains.discard(key)
         async with self._write_lock:
             cur = await self._db.execute(
                 "DELETE FROM audit_cache WHERE domain_key = ?", (key,)

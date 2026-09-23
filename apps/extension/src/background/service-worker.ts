@@ -11,7 +11,17 @@
 //   - MAX_CONCURRENT_AUDITS semaphore gate
 //   - Dynamic action badge reflecting live DPDP trust scores
 
-import { executeAuditByUrl, executeFetchCachedAudit, executeChat, executeHealthCheck, getServerConfig } from './api-client';
+import {
+  executeAuditByUrl,
+  executeFetchCachedAudit,
+  executeChat,
+  executeHealthCheck,
+  getServerConfig,
+  fetchServerPing,
+  registerDevice,
+  sendHeartbeat,
+  fetchUserProfile,
+} from './api-client';
 import * as auditCache from './audit-cache';
 import * as historyStore from './history-store';
 import * as chatStore from './chat-store';
@@ -20,6 +30,24 @@ import * as siteSession from './site-session';
 import type { ServiceResponse } from '../types/server-protocol';
 
 console.log('[Ssense] Service Worker v6.1 — multi-user scale, streaming chat, offline-first cache.');
+
+// Auto-handshake / Discovery on extension installation or startup
+chrome.runtime.onInstalled.addListener(async (details) => {
+  console.log('[Ssense] Extension installed / updated. Reason:', details?.reason);
+  if (details?.reason === 'install') {
+    chrome.runtime.openOptionsPage();
+  }
+  try {
+    const cfg = await getServerConfig();
+    const ping = await fetchServerPing(cfg.url);
+    if (ping.online && !cfg.configured && ping.registrationOpen && !ping.requiresInvite) {
+      console.log('[Ssense] Self-registration open. Performing zero-config handshake...');
+      await registerDevice();
+    }
+  } catch (err) {
+    console.warn('[Ssense] Initial handshake check deferred:', err);
+  }
+});
 
 // Pre-warm top domains in the background
 offlineCacheManager.warmTopDomainCaches().catch(() => {});
@@ -327,6 +355,31 @@ async function handleMessage(msg: any, sender: chrome.runtime.MessageSender): Pr
       if (!msg.domain) return { success:false, error:'Missing domain.' };
       await siteSession.togglePin(msg.domain);
       return { success:true, queue: await siteSession.getQueue() };
+    }
+
+    // ── Handshake & User Management ──────────────────────────────────────
+    case 'GET_SERVER_PING': {
+      const res = await fetchServerPing(msg.url);
+      return { success: res.online, ...res };
+    }
+    case 'REGISTER_DEVICE': {
+      const res = await registerDevice(
+        msg.name,
+        msg.email,
+        msg.deviceName,
+        msg.inviteCode,
+        msg.googleId,
+        msg.avatarUrl,
+      );
+      return res;
+    }
+    case 'SEND_HEARTBEAT': {
+      const ok = await sendHeartbeat();
+      return { success: ok };
+    }
+    case 'GET_USER_PROFILE': {
+      const profile = await fetchUserProfile();
+      return { success: Boolean(profile), profile };
     }
 
     // ── Engine config ─────────────────────────────────────────────────────

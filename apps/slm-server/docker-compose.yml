@@ -313,9 +313,25 @@ services:
     volumes:
       - ./nginx/nginx.cpu.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
-    depends_on:
-      slm-server-cpu:
-        condition: service_healthy
+  # ─────────────────────────────────────────────────────────────
+  # OPTIONAL TUNNEL: Cloudflare Tunnel for Global Access
+  # Enables the server running on AGX Spark in your lab to be
+  # accessed securely from any laptop anywhere in the world
+  # without needing a public static IP, router port forwarding,
+  # or purchasing a custom domain.
+  #
+  # Quick mode (free, no account needed):
+  #   docker compose --profile tunnel up
+  # Named mode (free Cloudflare Zero Trust account):
+  #   Set CLOUDFLARE_TUNNEL_TOKEN in your .env file
+  # ─────────────────────────────────────────────────────────────
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles: [ "tunnel", "jetson-tunnel", "gpu-tunnel", "cpu-tunnel" ]
+    container_name: ssense-cloudflared-tunnel
+    network_mode: host
+    command: tunnel --no-autoupdate --url http://127.0.0.1:8000
 
 volumes:
   # Redis is a rate-limit/nonce cache only (see redis_limiter.py) — safe to
