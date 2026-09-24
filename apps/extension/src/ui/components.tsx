@@ -33,6 +33,7 @@ const PATHS: Record<string, React.ReactNode> = {
   eyeOff: <><path d="M17.9 17.9A10.9 10.9 0 0 1 12 20c-7 0-11-8-11-8a18.5 18.5 0 0 1 5.1-5.9M9.9 4.2A9.1 9.1 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.2 3.2M1 1l22 22" /></>,
   expand: <><path d="m7 15 5 5 5-5M7 9l5-5 5 5" /></>,
   collapse: <><path d="m7 20 5-5 5 5M7 4l5 5 5-5" /></>,
+  maximize: <><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" /></>,
   sparkle: <path d="M12 3l2.1 5.9L20 11l-5.9 2.1L12 19l-2.1-5.9L4 11l5.9-2.1z" />,
 };
 

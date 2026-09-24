@@ -8,7 +8,7 @@ import { useActiveTab, useAuth, usePrefs, useTheme } from '../ui/hooks';
 
 type View = 'audit' | 'history' | 'privacy';
 
-function SignInGate({ onDone }: { onDone: () => void }) {
+export function SignInGate({ onDone }: { onDone: () => void }) {
   const { busy, error, signIn } = useGoogleSignIn(onDone);
   return (
     <div style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center', padding: 22 }}>
@@ -29,7 +29,7 @@ function SignInGate({ onDone }: { onDone: () => void }) {
 function App() {
   const [view, setView] = useState<View>('audit');
   const [domain, setDomain] = useState<string | null>(null);
-  const { auth, reload } = useAuth();
+  const { auth } = useAuth();
   const { prefs } = usePrefs();
   const tab = useActiveTab();
   useTheme(prefs?.theme);
@@ -57,7 +57,6 @@ function App() {
   }, []);
 
   if (!auth) return <div style={{ minHeight: '100dvh', display: 'grid', placeItems: 'center' }}><Spinner size={22} /></div>;
-  if (!auth.signedIn) return <SignInGate onDone={reload} />;
 
   if (view === 'history') return <HistoryView onBack={() => setView('audit')} onOpenPrivacy={(d) => { setDomain(d); setView('privacy'); }} />;
   if (view === 'privacy' && domain) return <PrivacyView domain={domain} onBack={() => setView('history')} />;

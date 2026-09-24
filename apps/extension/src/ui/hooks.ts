@@ -117,6 +117,18 @@ export async function openSidePanel(view: 'audit' | 'history' | 'privacy' = 'aud
   await chrome.storage.local.set({ ssense_sidepanel_view: view, ssense_history_focus: focusDomain ?? null });
   try {
     const w = await chrome.windows.getCurrent();
-    if (w?.id !== undefined) await chrome.sidePanel.open({ windowId: w.id });
-  } catch { /* side panel unsupported (e.g. some Chromium forks) */ }
+    if (w?.id !== undefined && chrome.sidePanel?.open) {
+      await chrome.sidePanel.open({ windowId: w.id });
+      return;
+    }
+  } catch {
+    /* side panel unsupported or rejected */
+  }
+  try {
+    chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') });
+  } catch { /* non-fatal */ }
+}
+
+export function openFullDashboard() {
+  chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') });
 }

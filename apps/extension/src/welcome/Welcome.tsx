@@ -35,7 +35,17 @@ export const Welcome: React.FC = () => {
           {current === 0 && (
             <>
               <div><div className="sx-eyebrow">Step 1 of 3</div><h2 className="sx-display" style={{ fontSize: 28, margin: '6px 0 0' }}>Connect your Google account</h2></div>
-              <GoogleButton busy={busy} onClick={signIn} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <GoogleButton busy={busy} onClick={signIn} />
+                <button
+                  type="button"
+                  className="sx-btn sx-btn--ghost sx-btn--block"
+                  onClick={() => setStep(1)}
+                  style={{ justifyContent: 'center' }}
+                >
+                  Skip for now (Continue as Guest)
+                </button>
+              </div>
               <SignInError message={error} />
               <SignInPromise />
             </>
@@ -44,11 +54,22 @@ export const Welcome: React.FC = () => {
           {current === 1 && (
             <>
               <div><div className="sx-eyebrow">Step 2 of 3</div><h2 className="sx-display" style={{ fontSize: 28, margin: '6px 0 0' }}>How should Ssense work?</h2></div>
-              {auth && (
+              {auth?.signedIn ? (
                 <div className="sx-card" style={{ display: 'flex', gap: 10, alignItems: 'center', padding: 10 }}>
                   <Avatar name={auth.name} email={auth.email} url={auth.avatarUrl} size={34} />
                   <div style={{ minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 650 }}>{auth.name}</div><div className="sx-muted sx-trunc" style={{ fontSize: 11.5 }}>{auth.email}</div></div>
                   <span className="sx-pill sx-tone-ok" style={{ marginLeft: 'auto' }}><i />Connected</span>
+                </div>
+              ) : (
+                <div className="sx-card" style={{ display: 'flex', gap: 10, alignItems: 'center', padding: 10 }}>
+                  <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'var(--ssense-accent-soft)', display: 'grid', placeItems: 'center', color: 'var(--ssense-accent)' }}>
+                    <Icon name="shield" size={18} />
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 650 }}>Guest / Local Mode</div>
+                    <div className="sx-muted sx-trunc" style={{ fontSize: 11.5 }}>Audits run locally. Sign in anytime to sync across devices.</div>
+                  </div>
+                  <span className="sx-pill sx-tone-info" style={{ marginLeft: 'auto' }}><i />Guest</span>
                 </div>
               )}
               {prefs && (

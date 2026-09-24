@@ -1,6 +1,29 @@
-html, body { width: 388px; min-height: 300px; max-height: 600px; overflow: hidden; }
-#root { display: flex; flex-direction: column; max-height: 600px; }
-.pp { display: flex; flex-direction: column; max-height: 600px; min-height: 0; }
+html, body {
+  width: 440px;
+  min-height: 560px;
+  height: 580px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--ssense-bg-base);
+  color: var(--ssense-text-primary);
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 580px;
+}
+
+.pp {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 580px;
+  min-height: 0;
+}
+
 .pp-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px 10px; }
 .pp-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 0 14px; padding: 3px; border-radius: 11px; background: var(--ssense-bg-elevated); }
 .pp-tab { font: 650 12px var(--ssense-font-ui); padding: 7px 8px; border-radius: 8px; border: 0; background: transparent; color: var(--ssense-text-secondary); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; }
@@ -11,3 +34,30 @@ html, body { width: 388px; min-height: 300px; max-height: 600px; overflow: hidde
 .pp-seg { display: flex; height: 8px; border-radius: 99px; overflow: hidden; background: var(--ssense-bg-elevated); gap: 2px; }
 .pp-seg > span { display: block; min-width: 3px; }
 .pp-site-head { display: flex; align-items: center; gap: 10px; padding: 9px 10px; width: 100%; }
+
+/* Maximized / Full-tab mode */
+@media (min-width: 600px) {
+  html, body {
+    width: 100%;
+    min-height: 100vh;
+    height: 100vh;
+    max-height: none;
+    overflow-y: auto;
+    background: var(--ssense-bg-deep);
+  }
+  #root {
+    width: 100%;
+    max-width: 680px;
+    height: 100vh;
+    max-height: none;
+    margin: 0 auto;
+    border-left: 1px solid var(--ssense-border);
+    border-right: 1px solid var(--ssense-border);
+    background: var(--ssense-bg-base);
+    box-shadow: 0 0 50px rgba(0,0,0,0.18);
+  }
+  .pp {
+    height: 100vh;
+    max-height: none;
+  }
+}

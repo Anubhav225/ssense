@@ -25,13 +25,12 @@ export const Popup: React.FC = () => {
   const { prefs, update } = usePrefs();
   useTheme(prefs?.theme);
 
-  if (!auth) return <div className="pp" style={{ minHeight: 260, placeItems: 'center', display: 'grid' }}><Spinner size={22} /></div>;
-  if (!auth.signedIn) return <SignedOut onDone={reloadAuth} />;
-  return <Main auth={auth} prefs={prefs} update={update} />;
+  if (!auth) return <div className="pp" style={{ minHeight: 560, height: 580, placeItems: 'center', display: 'grid' }}><Spinner size={22} /></div>;
+  return <Main auth={auth} prefs={prefs} update={update} onDoneAuth={reloadAuth} />;
 };
 
 // ─── Signed-out ───────────────────────────────────────────────────────────────
-const SignedOut: React.FC<{ onDone: () => void }> = ({ onDone }) => {
+export const SignedOut: React.FC<{ onDone: () => void }> = ({ onDone }) => {
   const { busy, error, signIn } = useGoogleSignIn(onDone);
   return (
     <div className="pp" style={{ padding: 18, gap: 16 }}>
@@ -52,9 +51,15 @@ const SignedOut: React.FC<{ onDone: () => void }> = ({ onDone }) => {
   );
 };
 
-// ─── Signed-in shell ──────────────────────────────────────────────────────────
-const Main: React.FC<{ auth: NonNullable<ReturnType<typeof useAuth>['auth']>; prefs: ReturnType<typeof usePrefs>['prefs']; update: ReturnType<typeof usePrefs>['update'] }> = ({ auth, prefs, update }) => {
+// ─── Main shell ───────────────────────────────────────────────────────────────
+const Main: React.FC<{
+  auth: NonNullable<ReturnType<typeof useAuth>['auth']>;
+  prefs: ReturnType<typeof usePrefs>['prefs'];
+  update: ReturnType<typeof usePrefs>['update'];
+  onDoneAuth?: () => void;
+}> = ({ auth, prefs, update }) => {
   const [tab, setTab] = useState<Tab>('site');
+  const [guestNoticeDismissed, setGuestNoticeDismissed] = useState(false);
   const { rows, loading } = useSites();
   const { state: sync, syncNow } = useSyncState();
   const active = useActiveTab();
@@ -63,10 +68,14 @@ const Main: React.FC<{ auth: NonNullable<ReturnType<typeof useAuth>['auth']>; pr
   // Freshen data when the popup opens (cheap no-op if synced recently).
   const kicked = useRef(false);
   useEffect(() => {
-    if (kicked.current || !sync) return;
+    if (kicked.current || !sync || !auth.signedIn) return;
     kicked.current = true;
     if (!sync.lastSyncAt || Date.now() - sync.lastSyncAt > 2 * 60_000) void syncNow();
-  }, [sync, syncNow]);
+  }, [sync, syncNow, auth.signedIn]);
+
+  const openFullTab = () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') });
+  };
 
   return (
     <div className="pp">
@@ -74,16 +83,33 @@ const Main: React.FC<{ auth: NonNullable<ReturnType<typeof useAuth>['auth']>; pr
         <BrandMark size={30} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="sx-display" style={{ fontSize: 15, lineHeight: 1.1 }}>Ssense</div>
-          <div className="sx-muted sx-trunc" style={{ fontSize: 11 }} title={auth.email}>{auth.email || auth.name}</div>
+          <div className="sx-muted sx-trunc" style={{ fontSize: 11 }} title={auth.signedIn ? (auth.email || auth.name) : 'Guest Mode (Local)'}>
+            {auth.signedIn ? (auth.email || auth.name) : 'Guest Mode (Local)'}
+          </div>
         </div>
         {prefs && (
           <button className="sx-icon-btn" onClick={() => update({ autoScan: !prefs.autoScan })} title={prefs.autoScan ? 'Auto-scan is on — click to pause' : 'Auto-scan is paused — click to resume'} aria-pressed={prefs.autoScan}>
             <Icon name={prefs.autoScan ? 'scan' : 'pause'} size={16} style={{ color: prefs.autoScan ? 'var(--ssense-accent)' : 'var(--ssense-accent-amber)' }} />
           </button>
         )}
+        <button className="sx-icon-btn" onClick={openFullTab} title="Maximize / Open full dashboard"><Icon name="maximize" size={16} /></button>
         <button className="sx-icon-btn" onClick={() => chrome.runtime.openOptionsPage()} title="Settings"><Icon name="settings" size={16} /></button>
-        <button className="sx-icon-btn" onClick={() => chrome.runtime.openOptionsPage()} title={auth.name} style={{ padding: 0 }}><Avatar name={auth.name} email={auth.email} url={auth.avatarUrl} size={26} /></button>
+        {auth.signedIn ? (
+          <button className="sx-icon-btn" onClick={() => chrome.runtime.openOptionsPage()} title={auth.name} style={{ padding: 0 }}><Avatar name={auth.name} email={auth.email} url={auth.avatarUrl} size={26} /></button>
+        ) : (
+          <button className="sx-btn sx-btn--ghost sx-btn--sm" onClick={() => chrome.runtime.openOptionsPage()} title="Sign in with Google to sync across devices" style={{ padding: '3px 8px', fontSize: 11 }}>Sign in</button>
+        )}
       </div>
+
+      {!auth.signedIn && !guestNoticeDismissed && (
+        <div style={{ margin: '0 14px 6px', padding: '6px 10px', borderRadius: 8, background: 'var(--ssense-bg-elevated)', border: '1px solid var(--ssense-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11 }}>
+          <span style={{ color: 'var(--ssense-text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Icon name="shield" size={12} style={{ color: 'var(--ssense-accent)' }} />
+            <span>Auditing active locally · <a href="#" onClick={(e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); }} style={{ color: 'var(--ssense-accent)', textDecoration: 'underline' }}>Sign in</a> to sync</span>
+          </span>
+          <button onClick={() => setGuestNoticeDismissed(true)} style={{ background: 'none', border: 'none', color: 'var(--ssense-text-muted)', cursor: 'pointer', padding: '0 2px' }} title="Dismiss">✕</button>
+        </div>
+      )}
 
       <div className="pp-tabs" role="tablist">
         <button className="pp-tab" role="tab" aria-selected={tab === 'site'} onClick={() => setTab('site')}><Icon name="globe" size={13} /> This site</button>
@@ -99,15 +125,16 @@ const Main: React.FC<{ auth: NonNullable<ReturnType<typeof useAuth>['auth']>; pr
       </div>
 
       <div className="pp-foot">
-        <Icon name={sync?.status === 'error' ? 'cloudOff' : 'sync'} size={13} className={sync?.status === 'syncing' ? 'sx-ring-spin' : undefined}
+        <Icon name={!auth.signedIn ? 'shield' : sync?.status === 'error' ? 'cloudOff' : 'sync'} size={13} className={sync?.status === 'syncing' ? 'sx-ring-spin' : undefined}
           style={{ color: sync?.status === 'error' ? 'var(--ssense-accent-rose)' : undefined }} />
         <span className="sx-trunc" style={{ flex: 1 }} title={sync?.lastError || ''}>
-          {!prefs?.syncEnabled ? 'Sync is off'
+          {!auth.signedIn ? 'Guest Mode (Local)'
+            : !prefs?.syncEnabled ? 'Sync is off'
             : sync?.status === 'syncing' ? 'Syncing…'
             : sync?.status === 'error' ? 'Sync problem — will retry'
             : sync?.lastSyncAt ? `Synced ${formatRelative(sync.lastSyncAt)}` : 'Not synced yet'}
         </span>
-        {prefs?.syncEnabled && <button className="sx-btn sx-btn--ghost sx-btn--sm" onClick={syncNow} disabled={sync?.status === 'syncing'}>Sync now</button>}
+        {auth.signedIn && prefs?.syncEnabled && <button className="sx-btn sx-btn--ghost sx-btn--sm" onClick={syncNow} disabled={sync?.status === 'syncing'}>Sync now</button>}
         <button className="sx-btn sx-btn--primary sx-btn--sm" onClick={async () => { await openSidePanel('audit'); window.close(); }}>Open panel</button>
       </div>
     </div>

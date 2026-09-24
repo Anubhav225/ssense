@@ -39,6 +39,19 @@ export const DESIGN_SYSTEM_CSS = `
     transition: background-color 0.2s ease, color 0.2s ease;
   }
 
+  @media (min-width: 768px) {
+    .ssense-header-top,
+    .ssense-toolbar,
+    .ssense-audit-card,
+    .ssense-stream,
+    .ssense-input-box {
+      max-width: 920px;
+      margin-left: auto;
+      margin-right: auto;
+      width: 100%;
+    }
+  }
+
   .ssense-scroll::-webkit-scrollbar { width: 6px; }
   .ssense-scroll::-webkit-scrollbar-track { background: transparent; }
   .ssense-scroll::-webkit-scrollbar-thumb { background: rgba(120,120,128,0.22); border-radius: 3px; }
@@ -959,6 +972,14 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
               {!isSystemPage && <ComplianceBadge score={trustScore} delta={scoreDelta} />}
             </div>
           </div>
+          <button
+            className="ssense-toolbar-btn"
+            onClick={() => chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') })}
+            title="Maximize / Open in full tab"
+            style={{ padding: '4px 9px', fontSize: 11 }}
+          >
+            <span>⛶</span><span>Maximize</span>
+          </button>
         </div>
 
         <nav className="ssense-toolbar">

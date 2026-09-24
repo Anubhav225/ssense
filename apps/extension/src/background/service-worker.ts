@@ -41,9 +41,8 @@ console.log('[Ssense] Service Worker v1.0 — verified sign-in, auto-scan, cross
 // extractor into tabs that are already open — otherwise the first minutes after
 // sign-in would look like "nothing is being scanned".
 async function scanOpenTabs(limit = 12) {
-  const st = await auth.getAuthState();
   const prefs = await prefsStore.getPrefs();
-  if (!st.signedIn || !prefs.autoScan) return;
+  if (!prefs.autoScan) return;
   const tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] }).catch(() => []);
   let n = 0;
   for (const t of tabs) {
@@ -64,7 +63,8 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   }
   try {
     const st = await auth.getAuthState();
-    if (st.signedIn) { sync.syncNow('installed').catch(() => {}); scanOpenTabs().catch(() => {}); }
+    if (st.signedIn) sync.syncNow('installed').catch(() => {});
+    scanOpenTabs().catch(() => {});
   } catch (err) {
     console.warn('[Ssense] Post-install check deferred:', err);
   }
@@ -549,13 +549,9 @@ async function handleMessage(msg: any, sender: chrome.runtime.MessageSender): Pr
 // ─── Auto-scan gate ────────────────────────────────────────────────────────────
 const _forceNext = new Set<string>();
 
-/** Returns an error response if the user isn't signed in (and records why), else null. */
-async function requireSignIn(domain: string): Promise<ServiceResponse | null> {
-  const st = await auth.getAuthState();
-  if (st.signedIn) return null;
-  await scans.setScan(domain, { state:'needs_signin' });
-  return { type:'ERROR', requestId: crypto.randomUUID(), success:false,
-    error:'Sign in with Google to scan sites.', errorKind:'auth', retryable:false };
+/** Guest mode is fully supported for local audits; returns null to proceed. */
+async function requireSignIn(_domain: string): Promise<ServiceResponse | null> {
+  return null;
 }
 
 function reportFromCache(e: auditCache.LocalAuditEntry): AuditReport {
