@@ -85,6 +85,33 @@ self.addEventListener('online', () => { sync.syncNow('online').catch(() => {}); 
 // Pre-warm top domains in the background
 offlineCacheManager.warmTopDomainCaches().catch(() => {});
 
+// ─── Toolbar Action Management ────────────────────────────────────────────────
+export async function applyToolbarActionConfig() {
+  try {
+    const prefs = await prefsStore.getPrefs();
+    if (prefs.toolbarAction === 'tab' || prefs.toolbarAction === 'sidepanel') {
+      await chrome.action.setPopup({ popup: '' });
+    } else {
+      await chrome.action.setPopup({ popup: 'popup.html' });
+    }
+  } catch {}
+}
+applyToolbarActionConfig().catch(() => {});
+
+chrome.action.onClicked?.addListener(async (tab) => {
+  const prefs = await prefsStore.getPrefs();
+  if (prefs.toolbarAction === 'sidepanel') {
+    if (tab.windowId !== undefined && chrome.sidePanel?.open) {
+      try {
+        await chrome.sidePanel.open({ windowId: tab.windowId });
+        return;
+      } catch {}
+    }
+  }
+  // Open widescreen dashboard in a browser tab
+  chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') });
+});
+
 // ─── Notifications ─────────────────────────────────────────────────────────────
 function notify(id: string, title: string, message: string) {
   chrome.notifications.create(id, { type:'basic', iconUrl:'icons/icon128.png', title, message, priority:1 }, () => void chrome.runtime.lastError);
@@ -485,6 +512,7 @@ async function handleMessage(msg: any, sender: chrome.runtime.MessageSender): Pr
     case 'GET_PREFS': return { success:true, prefs: await prefsStore.getPrefs() };
     case 'SET_PREFS': {
       const prefs = await prefsStore.setPrefs(msg.patch || {});
+      if (msg.patch?.toolbarAction) applyToolbarActionConfig().catch(()=>{});
       chrome.runtime.sendMessage({ type:'PREFS_CHANGED', prefs }).catch(()=>{});
       if (prefs.syncEnabled) sync.scheduleSync();
       syncTab().catch(()=>{});

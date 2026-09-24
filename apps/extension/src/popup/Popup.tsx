@@ -92,7 +92,15 @@ const Main: React.FC<{
             <Icon name={prefs.autoScan ? 'scan' : 'pause'} size={16} style={{ color: prefs.autoScan ? 'var(--ssense-accent)' : 'var(--ssense-accent-amber)' }} />
           </button>
         )}
-        <button className="sx-icon-btn" onClick={openFullTab} title="Maximize / Open full dashboard"><Icon name="maximize" size={16} /></button>
+        <button
+          className="sx-btn sx-btn--ghost sx-btn--sm pp-max-btn"
+          onClick={openFullTab}
+          title="Stretch & Open full widescreen dashboard in a new tab"
+          style={{ gap: 5, padding: '4px 8px', fontSize: 11.5 }}
+        >
+          <Icon name="maximize" size={13} />
+          <span>Widescreen Tab</span>
+        </button>
         <button className="sx-icon-btn" onClick={() => chrome.runtime.openOptionsPage()} title="Settings"><Icon name="settings" size={16} /></button>
         {auth.signedIn ? (
           <button className="sx-icon-btn" onClick={() => chrome.runtime.openOptionsPage()} title={auth.name} style={{ padding: 0 }}><Avatar name={auth.name} email={auth.email} url={auth.avatarUrl} size={26} /></button>
@@ -166,45 +174,54 @@ const ThisSite: React.FC<{ host: string | null; rows: SiteRow[]; loading: boolea
   const meta = STATUS_META[status];
 
   return (
-    <>
-      <div className="sx-card pp-hero">
-        <ScoreRing score={row?.score ?? null} size={76} scanning={scanning} />
-        <div style={{ minWidth: 0, display: 'grid', gap: 6 }}>
-          <div className="sx-trunc" style={{ fontSize: 15, fontWeight: 700 }} title={host}>{host}</div>
-          <div><StatusPill status={status} /></div>
-          <div className="sx-muted" style={{ fontSize: 11.5, lineHeight: 1.4 }}>
-            {scanning ? 'Reading the privacy policy…'
-              : row?.entry.lastAuditAt ? <>
-                  {row.counts.total === 0 ? 'No violations' : `${row.counts.total} issue${row.counts.total === 1 ? '' : 's'}${row.counts.high ? ` · ${row.counts.high} high impact` : ''}`}
-                  {' · '}audited {formatRelative(row.entry.lastAuditAt)}
-                </> : meta.hint}
+    <div className="pp-site-layout">
+      <div className="pp-site-left">
+        <div className="sx-card pp-hero">
+          <ScoreRing score={row?.score ?? null} size={76} scanning={scanning} />
+          <div style={{ minWidth: 0, display: 'grid', gap: 6 }}>
+            <div className="sx-trunc" style={{ fontSize: 15, fontWeight: 700 }} title={host}>{host}</div>
+            <div><StatusPill status={status} /></div>
+            <div className="sx-muted" style={{ fontSize: 11.5, lineHeight: 1.4 }}>
+              {scanning ? 'Reading the privacy policy…'
+                : row?.entry.lastAuditAt ? <>
+                    {row.counts.total === 0 ? 'No violations' : `${row.counts.total} issue${row.counts.total === 1 ? '' : 's'}${row.counts.high ? ` · ${row.counts.high} high impact` : ''}`}
+                    {' · '}audited {formatRelative(row.entry.lastAuditAt)}
+                  </> : meta.hint}
+            </div>
           </div>
         </div>
-      </div>
 
-      {(status === 'error' || status === 'nopolicy') && row?.error && (
-        <div style={{ fontSize: 12, lineHeight: 1.5, padding: '9px 11px', borderRadius: 9, background: 'var(--ssense-bg-elevated)', color: 'var(--ssense-text-secondary)' }}>{row.error}</div>
-      )}
-      {note && <div role="alert" style={{ fontSize: 12, padding: '9px 11px', borderRadius: 9, background: 'var(--ssense-bad-soft)', color: 'var(--ssense-accent-rose)' }}>{note}</div>}
+        {(status === 'error' || status === 'nopolicy') && row?.error && (
+          <div style={{ fontSize: 12, lineHeight: 1.5, padding: '9px 11px', borderRadius: 9, background: 'var(--ssense-bg-elevated)', color: 'var(--ssense-text-secondary)' }}>{row.error}</div>
+        )}
+        {note && <div role="alert" style={{ fontSize: 12, padding: '9px 11px', borderRadius: 9, background: 'var(--ssense-bad-soft)', color: 'var(--ssense-accent-rose)' }}>{note}</div>}
 
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button className="sx-btn sx-btn--primary" style={{ flex: 1 }} onClick={scanNow} disabled={busy || scanning || row?.ignored}>
-          {busy || scanning ? <Spinner size={14} /> : <Icon name="refresh" size={14} />}
-          {row?.entry.lastAuditAt ? 'Re-scan now' : 'Scan now'}
-        </button>
-        <button className="sx-btn" onClick={async () => { await openSidePanel('audit'); window.close(); }} title="Ask the co-pilot about this site"><Icon name="chat" size={14} /> Ask AI</button>
-        <button className="sx-btn" onClick={toggleIgnore} title={row?.ignored ? 'Resume scanning this site' : 'Never scan this site'} aria-pressed={row?.ignored}>
-          <Icon name={row?.ignored ? 'scan' : 'eyeOff'} size={14} />
-        </button>
-      </div>
-
-      {row && row.entry.lastReport && (
-        <div style={{ display: 'grid', gap: 8 }}>
-          <div className="sx-eyebrow">Findings</div>
-          <ViolationGroups violations={row.violations} compact onHighlight={highlightOnPage} />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="sx-btn sx-btn--primary" style={{ flex: 1 }} onClick={scanNow} disabled={busy || scanning || row?.ignored}>
+            {busy || scanning ? <Spinner size={14} /> : <Icon name="refresh" size={14} />}
+            {row?.entry.lastAuditAt ? 'Re-scan now' : 'Scan now'}
+          </button>
+          <button className="sx-btn" onClick={async () => { await openSidePanel('audit'); window.close(); }} title="Ask the co-pilot about this site"><Icon name="chat" size={14} /> Ask AI</button>
+          <button className="sx-btn" onClick={toggleIgnore} title={row?.ignored ? 'Resume scanning this site' : 'Never scan this site'} aria-pressed={row?.ignored}>
+            <Icon name={row?.ignored ? 'scan' : 'eyeOff'} size={14} />
+          </button>
         </div>
-      )}
-    </>
+      </div>
+
+      <div className="pp-site-right">
+        {row && row.entry.lastReport ? (
+          <div style={{ display: 'grid', gap: 8 }}>
+            <div className="sx-eyebrow">DPDP Act Compliance Findings</div>
+            <ViolationGroups violations={row.violations} compact onHighlight={highlightOnPage} />
+          </div>
+        ) : (
+          <div className="sx-card" style={{ padding: 24, textAlign: 'center', color: 'var(--ssense-text-secondary)', fontSize: 12.5, display: 'grid', gap: 8, placeItems: 'center' }}>
+            <Icon name="shield" size={24} style={{ color: 'var(--ssense-accent)' }} />
+            <div>No DPDP compliance findings recorded yet. Click <b>Scan now</b> to audit this site.</div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 };
 
@@ -237,38 +254,40 @@ const AllSites: React.FC<{ rows: SiteRow[]; summary: ReturnType<typeof summarize
         </div>
       </div>
 
-      {sorted.map((r) => (
-        <Collapsible key={r.domain} open={openSet.isOpen(r.domain)} onToggle={() => openSet.toggle(r.domain)} className="sx-card"
-          headClassName="pp-site-head"
-          header={
-            <>
-              <DomainTile domain={r.domain} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="sx-trunc" style={{ fontSize: 13, fontWeight: 650 }}>{r.domain}</div>
-                <div style={{ marginTop: 3 }}><StatusPill status={r.status} /></div>
-              </div>
-              <ScoreRing score={r.score} size={34} scanning={r.status === 'scanning'} />
-            </>
-          }>
-          <div style={{ padding: '2px 12px 12px', display: 'grid', gap: 9 }}>
-            {r.counts.total > 0 ? (
+      <div className="pp-sites-grid">
+        {sorted.map((r) => (
+          <Collapsible key={r.domain} open={openSet.isOpen(r.domain)} onToggle={() => openSet.toggle(r.domain)} className="sx-card"
+            headClassName="pp-site-head"
+            header={
               <>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {r.counts.high > 0 && <span className="sx-pill sx-tone-bad"><i />{r.counts.high} high</span>}
-                  {r.counts.medium > 0 && <span className="sx-pill sx-tone-warn"><i />{r.counts.medium} medium</span>}
-                  {r.counts.low > 0 && <span className="sx-pill sx-tone-info"><i />{r.counts.low} low</span>}
+                <DomainTile domain={r.domain} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="sx-trunc" style={{ fontSize: 13, fontWeight: 650 }}>{r.domain}</div>
+                  <div style={{ marginTop: 3 }}><StatusPill status={r.status} /></div>
                 </div>
-                <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12, lineHeight: 1.6, color: 'var(--ssense-text-secondary)' }}>
-                  {r.violations.slice(0, 3).map((v, i) => <li key={i}>{v.violation_type.replace(/_/g, ' ').toLowerCase()}</li>)}
-                  {r.violations.length > 3 && <li className="sx-muted">+{r.violations.length - 3} more</li>}
-                </ul>
+                <ScoreRing score={r.score} size={34} scanning={r.status === 'scanning'} />
               </>
-            ) : <div className="sx-muted" style={{ fontSize: 12 }}>{r.error || STATUS_META[r.status].hint}</div>}
-            <button className="sx-btn sx-btn--sm" onClick={async () => { await openSidePanel('history', r.domain); window.close(); }}>Full details <Icon name="external" size={12} /></button>
-          </div>
-        </Collapsible>
-      ))}
-      {rows.length > sorted.length && <div className="sx-muted" style={{ fontSize: 11.5, textAlign: 'center' }}>Showing 60 of {rows.length} — open the panel for everything.</div>}
+            }>
+            <div style={{ padding: '2px 12px 12px', display: 'grid', gap: 9 }}>
+              {r.counts.total > 0 ? (
+                <>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {r.counts.high > 0 && <span className="sx-pill sx-tone-bad"><i />{r.counts.high} high</span>}
+                    {r.counts.medium > 0 && <span className="sx-pill sx-tone-warn"><i />{r.counts.medium} medium</span>}
+                    {r.counts.low > 0 && <span className="sx-pill sx-tone-info"><i />{r.counts.low} low</span>}
+                  </div>
+                  <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12, lineHeight: 1.6, color: 'var(--ssense-text-secondary)' }}>
+                    {r.violations.slice(0, 3).map((v, i) => <li key={i}>{v.violation_type.replace(/_/g, ' ').toLowerCase()}</li>)}
+                    {r.violations.length > 3 && <li className="sx-muted">+{r.violations.length - 3} more</li>}
+                  </ul>
+                </>
+              ) : <div className="sx-muted" style={{ fontSize: 12 }}>{r.error || STATUS_META[r.status].hint}</div>}
+              <button className="sx-btn sx-btn--sm" onClick={async () => { await openSidePanel('history', r.domain); window.close(); }}>Full details <Icon name="external" size={12} /></button>
+            </div>
+          </Collapsible>
+        ))}
+      </div>
+      {rows.length > sorted.length && <div className="sx-muted" style={{ fontSize: 11.5, textAlign: 'center', marginTop: 8 }}>Showing 60 of {rows.length} — open the panel for everything.</div>}
     </>
   );
 };

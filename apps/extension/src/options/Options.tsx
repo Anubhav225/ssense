@@ -79,11 +79,55 @@ export default function Options() {
   };
   const testConn = async () => { setTest('busy'); const r = await send<any>({ type: 'HEALTH_CHECK' }); setTest(r?.success ? 'ok' : 'fail'); };
 
+  const handleBackToBrowsing = async () => {
+    try {
+      const tabs = await chrome.tabs.query({ currentWindow: true });
+      const browsingTab = tabs.find((t) => t.url && t.url.startsWith('http') && !t.url.includes('chrome-extension://'));
+      if (browsingTab?.id) {
+        await chrome.tabs.update(browsingTab.id, { active: true });
+        const curr = await chrome.tabs.getCurrent();
+        if (curr?.id) await chrome.tabs.remove(curr.id);
+        return;
+      }
+    } catch {}
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      window.close();
+    }
+  };
+
   if (!prefs || !auth) return <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}><Spinner size={24} /></div>;
 
   return (
     <div className="op">
       <nav className="op-nav" aria-label="Settings sections">
+        <button
+          className="sx-btn sx-btn--ghost"
+          onClick={handleBackToBrowsing}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 7,
+            marginBottom: 16,
+            padding: '8px 12px',
+            fontSize: 12.5,
+            fontWeight: 650,
+            color: 'var(--ssense-accent-cyan)',
+            background: 'var(--ssense-bg-elevated)',
+            border: '1px solid var(--ssense-border)',
+            borderRadius: 8,
+            cursor: 'pointer',
+            width: '100%',
+            justifyContent: 'flex-start',
+            transition: 'all 0.15s ease'
+          }}
+          title="Return to your active webpage / browsing tab"
+        >
+          <Icon name="arrowLeft" size={14} />
+          <span>← Back to Browsing</span>
+        </button>
+
         <div className="op-brand" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}><BrandMark size={32} /><div className="sx-display" style={{ fontSize: 18 }}>Settings</div></div>
         {NAV.map(([id, label, icon]) => (
           <a key={id} href={`#${id}`} aria-current={section === id} onClick={(e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' }); setSection(id); }}>
@@ -93,6 +137,27 @@ export default function Options() {
       </nav>
 
       <main className="op-main">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 14, marginBottom: 16, borderBottom: '1px solid var(--ssense-border)' }}>
+          <button
+            className="sx-btn sx-btn--ghost sx-btn--sm"
+            onClick={handleBackToBrowsing}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 650, color: 'var(--ssense-accent-cyan)' }}
+            title="Return to your active webpage"
+          >
+            <Icon name="arrowLeft" size={14} />
+            <span>← Back to Browsing</span>
+          </button>
+          <button
+            className="sx-btn sx-btn--ghost sx-btn--sm"
+            onClick={() => chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') })}
+            title="Open Widescreen Dashboard in a new tab"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
+          >
+            <Icon name="maximize" size={13} />
+            <span>Open Dashboard</span>
+          </button>
+        </div>
+
         <Section id="account" title="Account" desc="Signing in with Google keeps your history and settings on every device you use.">
           {auth.signedIn ? (
             <>
@@ -117,7 +182,20 @@ export default function Options() {
           )}
         </Section>
 
-        <Section id="scanning" title="Scanning" desc="Ssense reads a site’s public privacy policy — never the pages you browse.">
+        <Section id="scanning" title="Scanning & Layout" desc="Ssense reads a site’s public privacy policy — never the pages you browse.">
+          <Item title="Extension icon click" hint="Choose what opens when you click the Ssense icon in your browser toolbar.">
+            <select
+              className="sx-input sx-select"
+              style={{ width: 'auto' }}
+              value={prefs.toolbarAction || 'popup'}
+              onChange={(e) => set({ toolbarAction: e.target.value as any })}
+              aria-label="Extension icon click behavior"
+            >
+              <option value="popup">Widescreen Popup (780px)</option>
+              <option value="tab">Full Widescreen Dashboard (New Tab)</option>
+              <option value="sidepanel">Side Panel (Docked &amp; Stretchable)</option>
+            </select>
+          </Item>
           <Item title="Scan sites automatically" hint="Audit a site when you open it."><Switch label="Scan automatically" checked={prefs.autoScan} onChange={(v) => set({ autoScan: v })} /></Item>
           <Item title="Re-scan after" hint="Sites audited more recently than this are served instantly from your saved results.">
             <select className="sx-input sx-select" style={{ width: 'auto' }} value={prefs.rescanAfterDays} onChange={(e) => set({ rescanAfterDays: Number(e.target.value) })} aria-label="Re-scan interval">

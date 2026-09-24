@@ -26,3 +26,11 @@
 .hv-flash { animation: hv-flash 1.6s ease; }
 @keyframes hv-flash { 0%, 40% { box-shadow: 0 0 0 2px var(--ssense-accent); } 100% { box-shadow: none; } }
 @media (max-width: 420px) { .hv-kpis, .hv-kv4 { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 800px) {
+  .hv-top, .hv-tools, .hv-list {
+    max-width: 1400px;
+    margin-left: auto;
+    margin-right: auto;
+    width: 100%;
+  }
+}

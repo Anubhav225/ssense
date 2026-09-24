@@ -34,6 +34,7 @@ const PATHS: Record<string, React.ReactNode> = {
   expand: <><path d="m7 15 5 5 5-5M7 9l5-5 5 5" /></>,
   collapse: <><path d="m7 20 5-5 5 5M7 4l5 5 5-5" /></>,
   maximize: <><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" /></>,
+  arrowLeft: <path d="m12 19-7-7 7-7M5 12h14" />,
   sparkle: <path d="M12 3l2.1 5.9L20 11l-5.9 2.1L12 19l-2.1-5.9L4 11l5.9-2.1z" />,
 };
 

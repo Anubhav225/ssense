@@ -44,8 +44,9 @@ export const DESIGN_SYSTEM_CSS = `
     .ssense-toolbar,
     .ssense-audit-card,
     .ssense-stream,
+    .ssense-input-dock,
     .ssense-input-box {
-      max-width: 920px;
+      max-width: 1400px;
       margin-left: auto;
       margin-right: auto;
       width: 100%;
