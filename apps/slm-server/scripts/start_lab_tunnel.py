@@ -90,6 +90,7 @@ def main():
     project_root = Path(__file__).resolve().parent.parent.parent.parent
     server_env = project_root / "apps" / "slm-server" / ".env"
     extension_env = project_root / "apps" / "extension" / ".env.production"
+    extension_dev_env = project_root / "apps" / "extension" / ".env"
     root_env = project_root / ".env"
 
     print("═══════════════════════════════════════════════════════════════════")
@@ -147,6 +148,10 @@ def main():
 
         update_env_file(extension_env, "VITE_SSENSE_SERVER_URL", tunnel_url)
         print(f"   ✅ Extension .env.production updated with VITE_SSENSE_SERVER_URL={tunnel_url}")
+
+        if extension_dev_env.exists():
+            update_env_file(extension_dev_env, "VITE_SSENSE_SERVER_URL", tunnel_url)
+            print(f"   ✅ Extension .env updated with VITE_SSENSE_SERVER_URL={tunnel_url}")
 
         if root_env.exists():
             update_env_file(root_env, "VITE_SSENSE_SERVER_URL", tunnel_url)
