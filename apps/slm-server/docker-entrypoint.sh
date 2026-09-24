@@ -30,6 +30,11 @@ if [ -f "/app/sitecustomize.py" ]; then
     cp /app/sitecustomize.py /usr/local/lib/python3.11/site-packages/sitecustomize.py 2>/dev/null || true
 fi
 
+# Ensure server-side cryptographic keys exist in .env
+if [ -f "/app/scripts/generate_keys.sh" ]; then
+    bash /app/scripts/generate_keys.sh 2>/dev/null || true
+fi
+
 for dir in "/app/models" "/app/.cache/huggingface" "/app/.cache/vllm" "/app/data"; do
     mkdir -p "$dir"
     current_owner="$(stat -c '%u' "$dir")"

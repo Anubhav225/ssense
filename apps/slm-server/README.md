@@ -172,6 +172,7 @@ apps/slm-server/
 |   |-- certs/                  # SSL certificate mount directory (ssense.crt, ssense.key)
 |
 |-- scripts/
+|   |-- generate_keys.sh        # Server-side cryptographic key generator (API keys, HMAC, admin token)
 |   |-- deploy.sh               # Bash deployment script with hardware auto-detection (Linux/macOS)
 |   |-- deploy.ps1              # PowerShell deployment script for Windows environments
 |   |-- run.sh                  # Lifecycle management & automated cryptographic key generator
@@ -255,14 +256,18 @@ Navigate to the `apps/slm-server` directory:
 cd apps/slm-server
 ```
 
-You can automatically generate a secure `.env` file with freshly minted cryptographic secrets by running:
+You can automatically generate or complete your `.env` file with secure cryptographic server-side keys by running:
 
 ```bash
-chmod +x scripts/run.sh
-./scripts/run.sh
+chmod +x generate_keys.sh
+./generate_keys.sh
 ```
 
-Alternatively, copy `.env.example` manually:
+*(You can also run `./generate_keys.sh --force` to rotate keys, or `./generate_keys.sh --show` to display existing keys.)*
+
+The script automatically detects if `.env` or any server-side keys (`SSENSE_API_KEYS`, `SSENSE_HMAC_SECRET`, `SSENSE_ADMIN_TOKEN`) are missing or empty, generates cryptographically secure urlsafe secrets, safely updates `.env` in-place, and prints out the connection details to share with friends or paste into the Chrome Extension.
+
+Alternatively, you can copy `.env.example` manually:
 
 ```bash
 cp .env.example .env
