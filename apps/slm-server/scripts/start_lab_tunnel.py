@@ -48,11 +48,25 @@ def update_env_file(file_path: Path, key: str, value: str) -> bool:
 
 
 def find_or_download_cloudflared() -> str:
-    """Finds cloudflared in PATH, or downloads standalone binary if missing."""
+    """Finds cloudflared in PATH, standard installation directories, or local directory."""
     bin_name = "cloudflared.exe" if sys.platform == "win32" else "cloudflared"
     existing = shutil.which(bin_name) or shutil.which("cloudflared")
     if existing:
         return existing
+
+    # Standard Windows install locations (winget, MSI, chocolatey)
+    if sys.platform == "win32":
+        candidates = [
+            Path(r"C:\Program Files (x86)\cloudflared\cloudflared.exe"),
+            Path(r"C:\Program Files\cloudflared\cloudflared.exe"),
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "cloudflared" / "cloudflared.exe",
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "cloudflared" / "cloudflared.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages" / "cloudflared.exe",
+            Path(r"C:\ProgramData\chocolatey\bin\cloudflared.exe"),
+        ]
+        for c in candidates:
+            if c.is_file():
+                return str(c)
 
     local_bin = Path(__file__).resolve().parent / bin_name
     if local_bin.exists():
@@ -76,6 +90,7 @@ def main():
     project_root = Path(__file__).resolve().parent.parent.parent.parent
     server_env = project_root / "apps" / "slm-server" / ".env"
     extension_env = project_root / "apps" / "extension" / ".env.production"
+    root_env = project_root / ".env"
 
     print("═══════════════════════════════════════════════════════════════════")
     print("🚀 Ssense Global Tunnel & Domain Synchronizer")
@@ -132,6 +147,10 @@ def main():
 
         update_env_file(extension_env, "VITE_SSENSE_SERVER_URL", tunnel_url)
         print(f"   ✅ Extension .env.production updated with VITE_SSENSE_SERVER_URL={tunnel_url}")
+
+        if root_env.exists():
+            update_env_file(root_env, "VITE_SSENSE_SERVER_URL", tunnel_url)
+            print(f"   ✅ Root .env updated with VITE_SSENSE_SERVER_URL={tunnel_url}")
 
         print("\n💡 What to do next:")
         print("   1. Keep this tunnel process running on your AGX Spark / lab machine.")
