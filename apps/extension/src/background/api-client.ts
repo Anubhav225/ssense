@@ -82,16 +82,60 @@ export async function getOrCreateUserId(): Promise<string> {
   return _cachedUserId!;
 }
 
+// ─── Temporal & Crypto Optimization ───────────────────────────────────────────
+let _clockOffsetMs = 0;
+
+export function updateClockOffsetFromHeaders(headers: Headers): void {
+  const serverTime = headers.get('X-Server-Time');
+  if (serverTime) {
+    const sMs = Number(serverTime);
+    if (!isNaN(sMs) && sMs > 0) {
+      _clockOffsetMs = sMs - Date.now();
+      return;
+    }
+  }
+  const dateHeader = headers.get('Date');
+  if (dateHeader) {
+    const parsed = Date.parse(dateHeader);
+    if (!isNaN(parsed) && parsed > 0) {
+      _clockOffsetMs = parsed - Date.now();
+    }
+  }
+}
+
+export function getSynchronizedTimestamp(): string {
+  return (Date.now() + _clockOffsetMs).toString();
+}
+
+const _importedCryptoKeys = new Map<string, CryptoKey>();
+
+async function getHmacCryptoKey(secret: string): Promise<CryptoKey> {
+  let key = _importedCryptoKeys.get(secret);
+  if (!key) {
+    key = await crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(secret),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign']
+    );
+    _importedCryptoKeys.set(secret, key);
+  }
+  return key;
+}
+
 // ─── HMAC signing ─────────────────────────────────────────────────────────────
 export async function signedHeaders(cfg: ServerConfig, method: string, endpoint: string) {
-  const ts    = Date.now().toString();
+  const ts = getSynchronizedTimestamp();
   const nonce = crypto.randomUUID();
   const userId = await getOrCreateUserId();
-  const key   = await crypto.subtle.importKey('raw', new TextEncoder().encode(cfg.hmacSecret),
-    { name:'HMAC', hash:'SHA-256' }, false, ['sign']);
-  const sig   = await crypto.subtle.sign('HMAC', key,
-    new TextEncoder().encode(`${method.toUpperCase()}:${endpoint}:${ts}:${nonce}`));
-  const hex   = Array.from(new Uint8Array(sig)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  const key = await getHmacCryptoKey(cfg.hmacSecret);
+  const sig = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(`${method.toUpperCase()}:${endpoint}:${ts}:${nonce}`)
+  );
+  const hex = Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
   return {
     'Content-Type':       'application/json',
     'X-Ssense-API-Key':   cfg.apiKey,
@@ -146,14 +190,24 @@ async function fetchJSON<T>(endpoint: string, method: 'GET'|'POST', body: any, c
       const r = await fetch(url, { method, headers: await signedHeaders(cfg,method,endpoint),
         body: body?JSON.stringify(body):undefined, signal:ctrl.signal, credentials:'omit' });
       clearTimeout(tid);
+      updateClockOffsetFromHeaders(r.headers);
       if (!r.ok) {
         const txt = await r.text().catch(()=>'');
         // Fail-fast on 429: do NOT waste retry quota or keep the user waiting
         if (r.status === 429) {
           throw classify(r.status, txt);
         }
+        // Clock drift recovery: auto-resync using server header and retry immediately
+        const bLower = txt.toLowerCase();
+        if (r.status === 401 && (bLower.includes('temporal') || bLower.includes('timestamp') || bLower.includes('replay attack')) && i < retries) {
+          updateClockOffsetFromHeaders(r.headers);
+          await _delay(50);
+          continue;
+        }
         if (r.status >= 500 && i < retries) {
-          await _delay(2**i * 500);
+          // Jittered backoff prevents thundering herd on server recovery
+          const jitterDelay = Math.round((2**i * 500) * (0.6 + Math.random() * 0.8));
+          await _delay(jitterDelay);
           continue;
         }
         throw classify(r.status, txt);
@@ -161,7 +215,11 @@ async function fetchJSON<T>(endpoint: string, method: 'GET'|'POST', body: any, c
       return r.json() as Promise<T>;
     } catch(e: any) {
       clearTimeout(tid);
-      if (i<retries&&(e.name==='AbortError'||e.message?.includes('Failed to fetch'))) { await _delay(2**i*500); continue; }
+      if (i<retries&&(e.name==='AbortError'||e.message?.includes('Failed to fetch'))) {
+        const jitterDelay = Math.round((2**i * 500) * (0.6 + Math.random() * 0.8));
+        await _delay(jitterDelay);
+        continue;
+      }
       throw wrap(e,'Request failed.');
     }
   }
@@ -176,6 +234,7 @@ async function fetchSSE(endpoint: string, body: any, cfg: ServerConfig, onChunk?
   try {
     const r = await fetch(url, { method:'POST', headers: await signedHeaders(cfg,'POST',endpoint),
       body:JSON.stringify(body), signal:ctrl.signal, credentials:'omit' });
+    updateClockOffsetFromHeaders(r.headers);
     const rateLimit = parseRateLimitHeaders(r.headers);
     if (!r.ok||!r.body) {
       const t=await r.text().catch(()=>'');
@@ -336,10 +395,17 @@ export async function fetchServerPing(targetUrl?: string): Promise<ServerPingRes
       method: 'GET',
       headers: { 'Accept': 'application/json' },
     });
+    updateClockOffsetFromHeaders(res.headers);
     if (!res.ok) {
       return { online: false, error: `HTTP ${res.status}: ${res.statusText}` };
     }
     const data = await res.json();
+    if (data.server_time) {
+      const sMs = Number(data.server_time);
+      if (!isNaN(sMs) && sMs > 0) {
+        _clockOffsetMs = sMs - Date.now();
+      }
+    }
     return {
       online: data.status === 'online',
       service: data.service,

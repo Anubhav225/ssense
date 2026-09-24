@@ -195,7 +195,11 @@ async def _verify_hmac_body(request: Request) -> bool:
 
     now_ms = int(time.time() * 1000)
     if abs(now_ms - ts_ms) > 30000:
-        raise HTTPException(status_code=401, detail="HMAC temporal window expired (>30s). Replay attack blocked.")
+        raise HTTPException(
+            status_code=401,
+            detail="HMAC temporal window expired (>30s). Replay attack blocked.",
+            headers={"X-Server-Time": str(now_ms)},
+        )
 
     # Nonce replay via orchestrator's dedicated nonce cache
     if not await memory_orchestrator.check_nonce(nonce):

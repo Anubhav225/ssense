@@ -221,9 +221,21 @@ app.add_middleware(
     expose_headers=[
         "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Window",
         "X-DailyLimit-Limit", "X-DailyLimit-Remaining", "X-DailyLimit-Reset",
-        "X-Ssense-Audit-Remaining", "Retry-After",
+        "X-Ssense-Audit-Remaining", "Retry-After", "X-Server-Time",
     ],
 )
+
+
+@app.middleware("http")
+async def add_server_time_header(request: Request, call_next):
+    """Network latency & temporal synchronization middleware:
+    Injects accurate server epoch milliseconds into every response header so
+    client extensions can calibrate clock drift and eliminate HMAC temporal 401s."""
+    response = await call_next(request)
+    response.headers["X-Server-Time"] = str(int(time.time() * 1000))
+    return response
+
+
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 
@@ -889,6 +901,7 @@ async def auth_ping():
         "google_auth_configured": google_auth_configured(),
         "sync": True,
         "timestamp": int(time.time()),
+        "server_time": int(time.time() * 1000),
     }
 
 
@@ -1360,6 +1373,15 @@ async def chat(request: Request, body: ChatRequest):
         "X-DailyLimit-Reset": str(daily_reset),
     }
 
+    # Low-latency streaming headers: prevent intermediate edge proxies, Cloudflare tunnels,
+    # and Nginx from buffering SSE token chunks into 4KB blocks
+    sse_headers = {
+        **rate_limit_headers,
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+
     clean_prompt = sanitize_input_prompt(body.userPrompt, is_audit_policy=False)
     await check_model_extraction_attempt(request, clean_prompt)
     mode       = "thinking" if body.responseMode == "thinking" else "concise"
@@ -1373,7 +1395,7 @@ async def chat(request: Request, body: ChatRequest):
         async def _gate():
             yield f"data: {json.dumps({'event':'token','data':'Please run an Audit on this site (or mention an audited site) before chatting.'})}\n\n"
             yield f"data: {json.dumps({'event':'done'})}\n\n"
-        return StreamingResponse(_gate(), media_type="text/event-stream", headers=rate_limit_headers)
+        return StreamingResponse(_gate(), media_type="text/event-stream", headers=sse_headers)
 
     # Format multi-site audit summaries using trained anchors [AUDIT SUMMARY FOR domain]
     audit_blocks = [
@@ -1401,7 +1423,7 @@ async def chat(request: Request, body: ChatRequest):
                     break
                 event, data = item
                 yield f"data: {json.dumps({'event': event, 'data': data})}\n\n"
-        return StreamingResponse(_coalesced(), media_type="text/event-stream", headers=rate_limit_headers)
+        return StreamingResponse(_coalesced(), media_type="text/event-stream", headers=sse_headers)
 
     # ── Leader: admit into the bounded inference queue, then RAG + generate ─
     length_instr = (
@@ -1512,7 +1534,7 @@ async def chat(request: Request, body: ChatRequest):
         finally:
             await memory_orchestrator.cleanup_stream(task_key, broadcaster)
 
-    return StreamingResponse(_primary(), media_type="text/event-stream", headers=rate_limit_headers)
+    return StreamingResponse(_primary(), media_type="text/event-stream", headers=sse_headers)
 
 
 if __name__ == "__main__":

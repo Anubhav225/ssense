@@ -13,6 +13,7 @@
 
 import {
   executeAuditByUrl,
+  executeAuditPolicy,
   executeFetchCachedAudit,
   executeChat,
   executeHealthCheck,
@@ -685,7 +686,37 @@ async function _triggerAudit(
       chrome.runtime.getPlatformInfo().catch(() => {});
     }, 15_000);
     try {
-      const r=await executeAuditByUrl(domain,policyUrl,requestId,forceRefresh);
+      let r = await executeAuditByUrl(domain, policyUrl, requestId, forceRefresh);
+
+      // Resilient fallback for client-rendered SPAs or server scraping blockades:
+      // If server returns extraction failure (HTTP 422), attempt live tab DOM extraction.
+      if (r.type === 'ERROR' && (r.error?.includes('extract') || r.error?.includes('422') || r.error?.includes('No policy text'))) {
+        try {
+          const queryUrls = [policyUrl];
+          try {
+            const parsed = new URL(policyUrl);
+            queryUrls.push(`${parsed.origin}/*`);
+          } catch {}
+          const matchedTabs = await chrome.tabs.query({ url: queryUrls });
+          const candidateTab = matchedTabs[0] || (tabId ? await chrome.tabs.get(tabId).catch(() => null) : null);
+          if (candidateTab?.id) {
+            const injection = await chrome.scripting.executeScript({
+              target: { tabId: candidateTab.id },
+              func: () => {
+                const main = document.querySelector('main, article, [role="main"], .policy-content, #content') || document.body;
+                return main ? (main as HTMLElement).innerText || '' : '';
+              },
+            });
+            const extractedText = injection?.[0]?.result;
+            if (typeof extractedText === 'string' && extractedText.trim().length >= 400) {
+              console.log(`[Ssense SW] Server URL fetch failed for ${domain}; falling back to client tab DOM extraction (${extractedText.length} chars)`);
+              r = await executeAuditPolicy(domain, extractedText, requestId, forceRefresh);
+            }
+          }
+        } catch (fbErr) {
+          console.warn('[Ssense SW] Client DOM fallback attempt failed:', fbErr);
+        }
+      }
 
       if (r.type==='AUDIT_POLICY_RESULT'&&r.success) {
         const saved = await auditCache.saveAudit(domain,r.report,{
