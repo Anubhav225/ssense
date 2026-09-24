@@ -26,3 +26,7 @@
 - **MAIN-World Anti-Fingerprinting**: Preemptive WebGL hardware masking, Canvas noise injection, and AudioContext quantization.
 - **Interactive Legal Co-Pilot**: Switch between Regular (Concise) and Thinking (Deep reasoning) modes with persistent multi-site thread queueing.
 - **Local Data Control**: Full IndexedDB site history and cache purge controls from the options page.
+
+
+## 1.0.0 — final pre-release upgrade
+Google sign-in with server-side verification, first-run welcome flow, automatic scanning controls with live per-site status, collapsible audit history (status-grouped, severity-grouped violations), redesigned popup and settings, cross-device sync, bundled fonts, new design system. See `docs/V1_RELEASE_UPGRADE.md`.

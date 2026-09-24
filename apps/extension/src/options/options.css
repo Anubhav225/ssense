@@ -1,24 +1,24 @@
-:root {
-  color-scheme: dark;
-}
-
-html,
-body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  min-height: 100vh;
-  background-color: #09090B;
-  color: #FAFAFA;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-#root:empty {
-  height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: radial-gradient(circle at center, #18181B 0%, #09090B 100%);
+.op { min-height: 100vh; display: grid; grid-template-columns: 236px minmax(0, 1fr); max-width: 1080px; margin: 0 auto; }
+.op-nav { position: sticky; top: 0; align-self: start; height: 100vh; padding: 28px 18px; display: flex; flex-direction: column; gap: 4px; }
+.op-nav a { display: flex; gap: 10px; align-items: center; padding: 9px 11px; border-radius: 9px; font-size: 13.5px; font-weight: 600; color: var(--ssense-text-secondary); text-decoration: none; }
+.op-nav a:hover { background: var(--ssense-bg-elevated); color: var(--ssense-text-primary); }
+.op-nav a[aria-current="true"] { background: var(--ssense-accent-soft); color: var(--ssense-accent); }
+.op-main { padding: 34px 28px 80px; display: grid; gap: 22px; align-content: start; min-width: 0; }
+.op-sec { scroll-margin-top: 20px; }
+.op-sec > h2 { font-size: 22px; margin: 0 0 4px; }
+.op-sec > p { margin: 0 0 12px; font-size: 13px; color: var(--ssense-text-muted); line-height: 1.5; }
+.op-list { padding: 0 16px; }
+.op-item { display: flex; gap: 14px; align-items: center; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid var(--ssense-border); }
+.op-item:last-child { border-bottom: 0; }
+.op-item b { font-size: 14px; font-weight: 650; display: block; }
+.op-item small { font-size: 12.5px; color: var(--ssense-text-muted); line-height: 1.45; display: block; margin-top: 2px; }
+.op-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.op-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+@media (max-width: 820px) {
+  .op { grid-template-columns: 1fr; }
+  .op-nav { position: sticky; z-index: 5; height: auto; flex-direction: row; overflow-x: auto; padding: 10px 12px; background: var(--ssense-header-bg); backdrop-filter: blur(10px); border-bottom: 1px solid var(--ssense-border); }
+  .op-nav a { flex-shrink: 0; padding: 8px 10px; }
+  .op-nav .op-brand { display: none; }
+  .op-main { padding: 20px 14px 60px; }
+  .op-item { flex-wrap: wrap; }
 }

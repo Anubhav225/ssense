@@ -115,7 +115,7 @@ async function migrateLegacyStorage(): Promise<void> {
 export async function saveAudit(
   domain: string,
   report: AuditReport,
-  meta: { policy_url?: string; source?: string; age_days?: number },
+  meta: { policy_url?: string; source?: string; age_days?: number; audited_at?: number },
 ): Promise<LocalAuditEntry> {
   await migrateLegacyStorage();
   const norm = normaliseDomain(domain);
@@ -133,7 +133,7 @@ export async function saveAudit(
     violations:      report.violations ?? [],
     global_legal_reasoning: report.global_legal_reasoning ?? '',
     policy_url:      meta.policy_url ?? (prior?.policy_url || ''),
-    audited_at:      Date.now(),
+    audited_at:      meta.audited_at ?? Date.now(),
     age_days:        meta.age_days ?? 0,
     source:          meta.source ?? 'inference',
     previous_trust_score: prior ? prior.trust_score : null,

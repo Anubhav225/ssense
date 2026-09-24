@@ -83,7 +83,7 @@ export async function getOrCreateUserId(): Promise<string> {
 }
 
 // ─── HMAC signing ─────────────────────────────────────────────────────────────
-async function signedHeaders(cfg: ServerConfig, method: string, endpoint: string) {
+export async function signedHeaders(cfg: ServerConfig, method: string, endpoint: string) {
   const ts    = Date.now().toString();
   const nonce = crypto.randomUUID();
   const userId = await getOrCreateUserId();
@@ -222,7 +222,7 @@ const _delay = (ms: number) => new Promise(r => setTimeout(r, ms));
 // ─── Public API ───────────────────────────────────────────────────────────────
 export async function executeHealthCheck(requestId: string): Promise<ServiceResponse> {
   const cfg = await getServerConfig();
-  if (!cfg.configured) return {type:'ERROR',requestId,success:false,error:'Server not configured. Open Settings.',errorKind:'auth',retryable:false};
+  if (!cfg.configured) return {type:'ERROR',requestId,success:false,error:'Sign in to Ssense to continue.',errorKind:'auth',retryable:false};
   try {
     let d: any;
     try {
@@ -253,7 +253,7 @@ export async function executeAuditByUrl(
   domain: string, policyUrl: string, requestId: string, forceRefresh=false,
 ): Promise<ServiceResponse> {
   const cfg = await getServerConfig();
-  if (!cfg.configured) return {type:'ERROR',requestId,success:false,error:'Server not configured. Open Settings.',errorKind:'auth',retryable:false};
+  if (!cfg.configured) return {type:'ERROR',requestId,success:false,error:'Sign in to Ssense to continue.',errorKind:'auth',retryable:false};
   try {
     const d = await fetchJSON<AuditServerResponse>('/v1/audit/by-url','POST',
       {domain, policyUrl, force_refresh:forceRefresh}, cfg, 0, 240_000);
@@ -271,7 +271,7 @@ export async function executeAuditPolicy(
   domain: string, policyText: string, requestId: string, forceRefresh=false,
 ): Promise<ServiceResponse> {
   const cfg = await getServerConfig();
-  if (!cfg.configured) return {type:'ERROR',requestId,success:false,error:'Server not configured.',errorKind:'auth',retryable:false};
+  if (!cfg.configured) return {type:'ERROR',requestId,success:false,error:'Sign in to Ssense to continue.',errorKind:'auth',retryable:false};
   try {
     const d = await fetchJSON<AuditServerResponse>('/v1/audit','POST',
       {domain,policyText,force_refresh:forceRefresh},cfg, 0, 240_000);
@@ -285,7 +285,7 @@ export async function executeAuditPolicy(
 
 export async function executeFetchCachedAudit(domain: string, requestId: string): Promise<ServiceResponse> {
   const cfg = await getServerConfig();
-  if (!cfg.configured) return {type:'ERROR',requestId,success:false,error:'Server not configured.',errorKind:'auth',retryable:false};
+  if (!cfg.configured) return {type:'ERROR',requestId,success:false,error:'Sign in to Ssense to continue.',errorKind:'auth',retryable:false};
   try {
     const d = await fetchJSON<AuditServerResponse>(`/v1/audit/${encodeURIComponent(domain)}`,'GET',null,cfg);
     const report = d?.data;
@@ -303,7 +303,7 @@ export async function executeChat(
   const cfg = await getServerConfig();
   if (!cfg.configured) {
     onChunk?.('',true);
-    return {type:'ERROR',requestId,success:false,error:'Server not configured. Open Settings.',errorKind:'auth',retryable:false};
+    return {type:'ERROR',requestId,success:false,error:'Sign in to Ssense to continue.',errorKind:'auth',retryable:false};
   }
   try {
     const r = await fetchSSE('/v1/chat/stream',{domain,userPrompt,responseMode},cfg,onChunk);

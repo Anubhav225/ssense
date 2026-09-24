@@ -21,8 +21,18 @@ function fail(reason: string) {
   }).catch(() => {});
 }
 
+// Many sites (SPAs, consent-banner-gated footers) render their footer after
+// document_idle. Try immediately, then twice more before giving up.
+const RETRY_DELAYS_MS = [0, 2500, 6000];
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 (async () => {
-  const policyUrl = findPolicyUrl(document, document.baseURI);
+  let policyUrl: string | null = null;
+  for (const delay of RETRY_DELAYS_MS) {
+    if (delay) await wait(delay);
+    policyUrl = findPolicyUrl(document, document.baseURI);
+    if (policyUrl) break;
+  }
   if (!policyUrl) { fail('No privacy policy link found on this page.'); return; }
   if (!isSafePublicUrl(policyUrl)) { fail('Policy URL points to a private/internal host (SSRF guard).'); return; }
 
@@ -31,7 +41,7 @@ function fail(reason: string) {
     domain:    window.location.hostname,
     pageUrl:   window.location.href,
     policyUrl,
-  });
+  }).catch(() => {});
 })();
 
 } // end guard

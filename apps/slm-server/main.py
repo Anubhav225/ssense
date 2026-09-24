@@ -67,6 +67,10 @@ from security import (
     verify_hmac_signature_chat,
 )
 from user_store import user_store
+from sync_store import sync_store
+from google_auth import (
+    GoogleAuthError, verify_google_token, google_auth_configured, require_google_auth,
+)
 
 llm_engine: Optional[Any] = None
 COMPUTE_PROFILE_ENV = os.getenv("SSENSE_COMPUTE_PROFILE", "auto").strip().lower()
@@ -160,10 +164,12 @@ async def lifespan(app: FastAPI):
     # db_sync.py's docstring for the full safety rules.
     db_sync.import_if_new(audit_store._db_path)
     db_sync.import_if_new(user_store.db_path)
+    db_sync.import_if_new(sync_store.db_path)
 
     await memory_orchestrator.verify_rate_limiter_backend()
     await audit_store.initialize()
     await user_store.initialize()
+    await sync_store.initialize()
     base_dir, audit_dir, chat_dir = ensure_models_exist()
     await rag_engine.initialize()
 
@@ -175,7 +181,7 @@ async def lifespan(app: FastAPI):
     )
 
     # Background periodic export → SSENSE_DB_EXPORT_PATH (no-op if unset).
-    sync_task = asyncio.create_task(db_sync.periodic_export_task([audit_store._db_path, user_store.db_path]))
+    sync_task = asyncio.create_task(db_sync.periodic_export_task([audit_store._db_path, user_store.db_path, sync_store.db_path]))
 
     print("✅ Ssense SLM Server ready.")
     yield
@@ -185,7 +191,7 @@ async def lifespan(app: FastAPI):
         await sync_task
     except asyncio.CancelledError:
         pass
-    await db_sync.final_export([audit_store._db_path, user_store.db_path])
+    await db_sync.final_export([audit_store._db_path, user_store.db_path, sync_store.db_path])
     await audit_store.close()
     await user_store.close()
     await close_policy_fetch_clients()
@@ -250,6 +256,31 @@ class RegisterRequest(BaseModel):
     device_id: Optional[str] = Field(None, max_length=100, description="Client-generated unique installation ID")
     platform: Optional[str] = Field(None, max_length=50, description="OS or browser platform")
     invite_code: Optional[str] = Field(None, max_length=100, description="Optional invite code if required")
+
+
+class GoogleAuthRequest(BaseModel):
+    token: str = Field(..., min_length=20, max_length=4096, description="Google OAuth2 access token or OIDC ID token")
+    token_type: str = Field("access_token", description="'access_token' or 'id_token'")
+    device_name: Optional[str] = Field(None, max_length=100)
+    device_id: Optional[str] = Field(None, max_length=100)
+    platform: Optional[str] = Field(None, max_length=50)
+    invite_code: Optional[str] = Field(None, max_length=100)
+
+
+class SyncSiteRecord(BaseModel):
+    domain: str = Field(..., min_length=1, max_length=253)
+    updated_at: int = Field(..., gt=0, description="Epoch ms of last local modification")
+    data: Dict[str, Any]
+
+
+class SyncPrefsRecord(BaseModel):
+    updated_at: int = Field(..., gt=0)
+    data: Dict[str, Any]
+
+
+class SyncPushRequest(BaseModel):
+    sites: list[SyncSiteRecord] = Field(default_factory=list, max_length=200)
+    prefs: Optional[SyncPrefsRecord] = None
 
 
 class HeartbeatRequest(BaseModel):
@@ -854,6 +885,9 @@ async def auth_ping():
         "registration_open": allow_reg,
         "requires_invite": bool(os.getenv("SSENSE_INVITE_CODE", "").strip()),
         "public_url": os.getenv("SSENSE_PUBLIC_URL", "").strip(),
+        "google_auth_required": require_google_auth(),
+        "google_auth_configured": google_auth_configured(),
+        "sync": True,
         "timestamp": int(time.time()),
     }
 
@@ -871,6 +905,15 @@ async def auth_register(request: Request, body: RegisterRequest):
         raise HTTPException(
             status_code=403,
             detail="Registration is disabled on this server. Contact the administrator for an API key.",
+        )
+
+    if require_google_auth():
+        # An unverified e-mail must never be enough to obtain (or re-obtain) a
+        # user's API key + HMAC secret: that would let anyone impersonate any
+        # address.  Clients must use POST /v1/auth/google instead.
+        raise HTTPException(
+            status_code=403,
+            detail="Sign in with Google is required. Use /v1/auth/google.",
         )
 
     required_invite = os.getenv("SSENSE_INVITE_CODE", "").strip()
@@ -915,6 +958,104 @@ async def auth_register(request: Request, body: RegisterRequest):
         "created_at": creds["created_at"],
         "message": "Handshake successful. Store these credentials safely.",
     }
+
+
+def _registration_payload(creds: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "status": "registered",
+        "user_id": creds["user_id"],
+        "email": creds["email"],
+        "display_name": creds["display_name"],
+        "google_id": creds.get("google_id"),
+        "avatar_url": creds.get("avatar_url"),
+        "api_key": creds["api_key"],
+        "hmac_secret": creds["hmac_secret"],
+        "device_id": creds["device_id"],
+        "public_url": os.getenv("SSENSE_PUBLIC_URL", "").strip(),
+        "created_at": creds["created_at"],
+        "is_new": creds.get("is_new", False),
+        "message": "Signed in with Google.",
+    }
+
+
+@app.post("/v1/auth/google", tags=["Auth"])
+@limiter.limit("10/minute")
+async def auth_google(request: Request, body: GoogleAuthRequest):
+    """
+    Verified sign-in. The extension obtains a Google token through
+    chrome.identity; we validate it with Google (audience-checked) and only
+    then provision / return the account's credentials. The e-mail therefore
+    can't be spoofed by the client.
+    """
+    if os.getenv("SSENSE_ALLOW_REGISTRATION", "true").strip().lower() not in ("true", "1", "yes"):
+        raise HTTPException(status_code=403, detail="Sign-ups are disabled on this server.")
+
+    required_invite = os.getenv("SSENSE_INVITE_CODE", "").strip()
+    if required_invite and body.invite_code != required_invite:
+        raise HTTPException(status_code=403, detail="Invalid or missing invite code for this server.")
+
+    try:
+        ident = await verify_google_token(body.token, body.token_type)
+    except GoogleAuthError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
+
+    client_ip = get_client_ip(request)
+    ua = request.headers.get("User-Agent", body.platform or "Ssense-Extension")
+    try:
+        creds = await user_store.register_user(
+            email=ident.email,
+            display_name=ident.name,
+            client_ip=client_ip,
+            device_id=body.device_id,
+            device_name=body.device_name,
+            user_agent=ua,
+            google_id=ident.sub,
+            avatar_url=ident.picture,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        print(f"❌ [Auth] Google sign-in error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to sign you in.")
+
+    print(f"🔑 [Auth] Google sign-in OK for {ident.email} from {client_ip}")
+    return _registration_payload(creds)
+
+
+# ── Cross-device sync (per-account) ─────────────────────────────────────────
+async def _sync_user_id(request: Request) -> str:
+    api_key = request.headers.get("X-Ssense-API-Key", "")
+    user = user_store.get_user_by_api_key(api_key)
+    if not user:
+        raise HTTPException(status_code=403, detail="Sync requires a signed-in Ssense account.")
+    return user["user_id"]
+
+
+@app.post("/v1/sync/push", tags=["Sync"], dependencies=[Depends(verify_hmac_signature)])
+async def sync_push(request: Request, body: SyncPushRequest):
+    uid = await _sync_user_id(request)
+    res = await sync_store.push(
+        uid,
+        [s.model_dump() for s in body.sites],
+        body.prefs.model_dump() if body.prefs else None,
+    )
+    return {"status": "ok", **res, "server_time": int(time.time() * 1000)}
+
+
+@app.get("/v1/sync/pull", tags=["Sync"], dependencies=[Depends(verify_hmac_signature)])
+async def sync_pull(request: Request, cursor: int = 0, limit: int = 200):
+    uid = await _sync_user_id(request)
+    limit = max(1, min(limit, 500))
+    res = await sync_store.pull(uid, max(0, cursor), limit)
+    return {"status": "ok", **res, "server_time": int(time.time() * 1000)}
+
+
+@app.delete("/v1/sync/data", tags=["Sync"], dependencies=[Depends(verify_hmac_signature)])
+async def sync_delete(request: Request):
+    uid = await _sync_user_id(request)
+    n = await sync_store.delete_all(uid)
+    return {"status": "deleted", "records": n}
+
 
 
 @app.post("/v1/auth/heartbeat", tags=["Auth"], dependencies=[Depends(verify_hmac_signature)])

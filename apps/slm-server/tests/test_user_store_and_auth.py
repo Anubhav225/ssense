@@ -221,6 +221,11 @@ class TestFastAPIAuthEndpoints(unittest.TestCase):
         asyncio.run(user_store.initialize())
 
     def setUp(self):
+        # These cases exercise the legacy e-mail handshake (dev/lab mode); the
+        # verified-Google path is covered in test_google_sync.py.
+        patcher = patch.dict(os.environ, {"SSENSE_REQUIRE_GOOGLE_AUTH": "false"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.client = TestClient(app)
 
     def test_01_auth_ping(self):

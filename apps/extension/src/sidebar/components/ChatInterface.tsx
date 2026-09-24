@@ -19,56 +19,12 @@ function formatDuration(ms: number): string {
 // DESIGN SYSTEM
 // ═══════════════════════════════════════════════════════════════
 export const DESIGN_SYSTEM_CSS = `
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
-
-  :root {
-    --ssense-bg-deep: #09090B;
-    --ssense-bg-surface: #18181B;
-    --ssense-bg-elevated: #27272A;
-    --ssense-border: rgba(255,255,255,0.07);
-    --ssense-border-strong: rgba(255,255,255,0.14);
-    --ssense-text-primary: #FAFAFA;
-    --ssense-text-secondary: #A1A1AA;
-    --ssense-text-muted: #71717A;
-    --ssense-accent-cyan: #06B6D4;
-    --ssense-accent-violet: #8B5CF6;
-    --ssense-accent-emerald: #10B981;
-    --ssense-accent-rose: #F43F5E;
-    --ssense-accent-amber: #F59E0B;
-    --ssense-gradient-ai: linear-gradient(135deg, var(--ssense-accent-cyan) 0%, var(--ssense-accent-violet) 100%);
-    --ssense-glass: rgba(255,255,255,0.02);
-    --ssense-header-bg: rgba(9,9,11,0.85);
-    --ssense-dock-bg: rgba(9,9,11,0.92);
-    --ssense-shadow-ambient: 0 4px 20px rgba(0,0,0,0.5);
-  }
-
-  @media (prefers-color-scheme: light) {
-    :root {
-      --ssense-bg-deep: #FAFAFA;
-      --ssense-bg-surface: #FFFFFF;
-      --ssense-bg-elevated: #F4F4F5;
-      --ssense-border: rgba(0,0,0,0.08);
-      --ssense-border-strong: rgba(0,0,0,0.16);
-      --ssense-text-primary: #18181B;
-      --ssense-text-secondary: #52525B;
-      --ssense-text-muted: #71717A;
-      --ssense-accent-cyan: #0891B2;
-      --ssense-accent-violet: #7C3AED;
-      --ssense-accent-emerald: #059669;
-      --ssense-accent-rose: #E11D48;
-      --ssense-accent-amber: #D97706;
-      --ssense-gradient-ai: linear-gradient(135deg, #0891B2 0%, #7C3AED 100%);
-      --ssense-glass: rgba(0,0,0,0.02);
-      --ssense-header-bg: rgba(250,250,250,0.88);
-      --ssense-dock-bg: rgba(250,250,250,0.94);
-      --ssense-shadow-ambient: 0 4px 18px rgba(0,0,0,0.07);
-    }
-  }
+  /* Tokens + fonts now come from ../../ui/ui.css (shared design system). */
 
   * { box-sizing: border-box; }
 
   .ssense-root {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: var(--ssense-font-ui);
     background: var(--ssense-bg-deep);
     color: var(--ssense-text-primary);
     height: 100vh;
@@ -203,7 +159,7 @@ export const DESIGN_SYSTEM_CSS = `
   }
   .ssense-entities-list { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
   .ssense-entity-tag {
-    font-size: 10px; font-family: 'JetBrains Mono', monospace; padding: 2px 6px;
+    font-size: 10px; font-family: var(--ssense-font-mono); padding: 2px 6px;
     border-radius: 4px; background: var(--ssense-bg-surface);
     color: var(--ssense-text-secondary); border: 1px solid var(--ssense-border);
   }
@@ -252,7 +208,7 @@ export const DESIGN_SYSTEM_CSS = `
   .ssense-msg-header-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ssense-accent-cyan); }
   .ssense-inline-code {
     background: rgba(120,120,128,0.15); padding: 2px 5px; border-radius: 4px;
-    font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--ssense-accent-cyan);
+    font-family: var(--ssense-font-mono); font-size: 11.5px; color: var(--ssense-accent-cyan);
   }
 
   .ssense-input-dock {
