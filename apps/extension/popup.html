@@ -6,6 +6,33 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="color-scheme" content="dark light" />
   <title>Ssense</title>
+  <style>
+    /* Fixed base dimensions to ensure Chromium never collapses the popup into a thin strip */
+    html, body {
+      width: 480px !important;
+      min-width: 480px !important;
+      max-width: 480px !important;
+      height: 580px !important;
+      min-height: 580px !important;
+      max-height: 600px !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      overflow-x: hidden !important;
+      overflow-y: auto !important;
+      background: #0B0D0E !important;
+      color: #EEF1EA !important;
+      box-sizing: border-box !important;
+    }
+    #root {
+      width: 480px !important;
+      min-width: 480px !important;
+      max-width: 480px !important;
+      min-height: 580px !important;
+      box-sizing: border-box !important;
+      display: flex !important;
+      flex-direction: column !important;
+    }
+  </style>
 </head>
 
 <body>

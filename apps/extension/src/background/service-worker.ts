@@ -57,6 +57,7 @@ async function scanOpenTabs(limit = 12) {
 chrome.runtime.onInstalled.addListener(async (details) => {
   console.log('[Ssense] Extension installed / updated. Reason:', details?.reason);
   sync.registerSyncAlarms();
+  await applyToolbarActionConfig().catch(() => {});
   if (details?.reason === 'install') {
     // First run: full-page welcome with Google sign-in (a popup can't stay open through the OAuth window).
     chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
@@ -72,6 +73,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
 chrome.runtime.onStartup.addListener(() => {
   sync.registerSyncAlarms();
+  applyToolbarActionConfig().catch(() => {});
   sync.syncNow('startup').catch(() => {});
 });
 
@@ -89,27 +91,46 @@ offlineCacheManager.warmTopDomainCaches().catch(() => {});
 export async function applyToolbarActionConfig() {
   try {
     const prefs = await prefsStore.getPrefs();
-    if (prefs.toolbarAction === 'tab' || prefs.toolbarAction === 'sidepanel') {
+    const action = prefs.toolbarAction || 'sidepanel';
+    if (action === 'sidepanel') {
       await chrome.action.setPopup({ popup: '' });
+      if (chrome.sidePanel?.setPanelBehavior) {
+        await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+      }
+    } else if (action === 'tab') {
+      await chrome.action.setPopup({ popup: '' });
+      if (chrome.sidePanel?.setPanelBehavior) {
+        await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
+      }
     } else {
+      if (chrome.sidePanel?.setPanelBehavior) {
+        await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
+      }
       await chrome.action.setPopup({ popup: 'popup.html' });
     }
-  } catch {}
+  } catch (err) {
+    console.warn('[Ssense] Failed to apply toolbar action config:', err);
+  }
 }
 applyToolbarActionConfig().catch(() => {});
 
 chrome.action.onClicked?.addListener(async (tab) => {
-  const prefs = await prefsStore.getPrefs();
-  if (prefs.toolbarAction === 'sidepanel') {
-    if (tab.windowId !== undefined && chrome.sidePanel?.open) {
-      try {
-        await chrome.sidePanel.open({ windowId: tab.windowId });
-        return;
-      } catch {}
+  try {
+    const prefs = await prefsStore.getPrefs();
+    const action = prefs.toolbarAction || 'sidepanel';
+    if (action === 'sidepanel') {
+      if (tab?.windowId !== undefined && chrome.sidePanel?.open) {
+        try {
+          await chrome.sidePanel.open({ windowId: tab.windowId });
+          return;
+        } catch {}
+      }
     }
+    // Open full widescreen dashboard in a tab
+    chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') });
+  } catch {
+    chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') });
   }
-  // Open widescreen dashboard in a browser tab
-  chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') });
 });
 
 // ─── Notifications ─────────────────────────────────────────────────────────────

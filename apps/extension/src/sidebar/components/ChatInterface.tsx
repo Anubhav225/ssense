@@ -476,7 +476,14 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
   const [showExplainability, setShowExplainability] = useState(false);
   const [showShield, setShowShield]       = useState(false);
   const [messages, setMessages]           = useState<{ role: 'user' | 'ai'; text: string }[]>([]);
-  const [input, setInput]                 = useState('');
+  const [input, setInput]                 = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('q') || '';
+    } catch {
+      return '';
+    }
+  });
   const [isAuditing, setIsAuditing]       = useState(false);
   // ── Site-thread queue: chat identity is DECOUPLED from "which tab is
   // active". `domain` below still tracks the viewed tab (for the audit

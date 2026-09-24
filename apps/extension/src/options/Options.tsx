@@ -187,13 +187,13 @@ export default function Options() {
             <select
               className="sx-input sx-select"
               style={{ width: 'auto' }}
-              value={prefs.toolbarAction || 'popup'}
+              value={prefs.toolbarAction || 'sidepanel'}
               onChange={(e) => set({ toolbarAction: e.target.value as any })}
               aria-label="Extension icon click behavior"
             >
-              <option value="popup">Widescreen Popup (780px)</option>
+              <option value="sidepanel">Side Panel (Docked, Stretchable &amp; Commands) [Default]</option>
               <option value="tab">Full Widescreen Dashboard (New Tab)</option>
-              <option value="sidepanel">Side Panel (Docked &amp; Stretchable)</option>
+              <option value="popup">Fixed Popup Window (480px)</option>
             </select>
           </Item>
           <Item title="Scan sites automatically" hint="Audit a site when you open it."><Switch label="Scan automatically" checked={prefs.autoScan} onChange={(v) => set({ autoScan: v })} /></Item>

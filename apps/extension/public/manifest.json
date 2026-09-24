@@ -55,8 +55,7 @@
   },
   "options_page": "options.html",
   "action": {
-    "default_title": "Open Ssense Privacy Shield",
-    "default_popup": "popup.html"
+    "default_title": "Open Ssense Privacy Shield (Stretchable Co-pilot & Audit)"
   },
   "icons": {
     "16": "icons/icon16.png",

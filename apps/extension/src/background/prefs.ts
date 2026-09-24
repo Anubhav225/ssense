@@ -37,7 +37,7 @@ export const DEFAULT_PREFS: Prefs = {
   showBadge: true,
   syncEnabled: true,
   theme: 'system',
-  toolbarAction: 'popup',
+  toolbarAction: 'sidepanel',
   _updatedAt: 0,
 };
 

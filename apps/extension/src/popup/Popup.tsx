@@ -101,6 +101,25 @@ const Main: React.FC<{
           <Icon name="maximize" size={13} />
           <span>Widescreen Tab</span>
         </button>
+        <button
+          className="sx-btn sx-btn--ghost sx-btn--sm"
+          onClick={async () => {
+            try {
+              const currentWindow = await chrome.windows.getCurrent();
+              if (currentWindow.id !== undefined && chrome.sidePanel?.open) {
+                await chrome.sidePanel.open({ windowId: currentWindow.id });
+                window.close();
+                return;
+              }
+            } catch {}
+            openFullTab();
+          }}
+          title="Open stretchable Side Panel on the side of your window"
+          style={{ gap: 4, padding: '4px 8px', fontSize: 11.5 }}
+        >
+          <Icon name="sparkle" size={13} />
+          <span>Side Panel</span>
+        </button>
         <button className="sx-icon-btn" onClick={() => chrome.runtime.openOptionsPage()} title="Settings"><Icon name="settings" size={16} /></button>
         {auth.signedIn ? (
           <button className="sx-icon-btn" onClick={() => chrome.runtime.openOptionsPage()} title={auth.name} style={{ padding: 0 }}><Avatar name={auth.name} email={auth.email} url={auth.avatarUrl} size={26} /></button>
@@ -109,8 +128,35 @@ const Main: React.FC<{
         )}
       </div>
 
+      <div style={{ margin: '8px 14px 2px', display: 'flex', gap: 6, alignItems: 'center' }}>
+        <input
+          className="sx-input sx-mono"
+          style={{ fontSize: 11.5, padding: '6px 10px', height: 32 }}
+          placeholder="Type command / query (e.g. audit, cookies)..."
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              const val = (e.target as HTMLInputElement).value;
+              if (val.trim()) {
+                chrome.tabs.create({ url: chrome.runtime.getURL(`sidepanel.html?q=${encodeURIComponent(val.trim())}`) });
+              }
+            }
+          }}
+        />
+        <button
+          className="sx-btn sx-btn--primary sx-btn--sm"
+          style={{ height: 32, padding: '0 10px', fontSize: 11 }}
+          onClick={(e) => {
+            const input = (e.currentTarget.previousElementSibling as HTMLInputElement)?.value;
+            chrome.tabs.create({ url: chrome.runtime.getURL(`sidepanel.html?q=${encodeURIComponent(input || '')}`) });
+          }}
+          title="Send command to AI Co-pilot"
+        >
+          Send
+        </button>
+      </div>
+
       {!auth.signedIn && !guestNoticeDismissed && (
-        <div style={{ margin: '0 14px 6px', padding: '6px 10px', borderRadius: 8, background: 'var(--ssense-bg-elevated)', border: '1px solid var(--ssense-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11 }}>
+        <div style={{ margin: '6px 14px 4px', padding: '6px 10px', borderRadius: 8, background: 'var(--ssense-bg-elevated)', border: '1px solid var(--ssense-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: 11 }}>
           <span style={{ color: 'var(--ssense-text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
             <Icon name="shield" size={12} style={{ color: 'var(--ssense-accent)' }} />
             <span>Auditing active locally · <a href="#" onClick={(e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); }} style={{ color: 'var(--ssense-accent)', textDecoration: 'underline' }}>Sign in</a> to sync</span>

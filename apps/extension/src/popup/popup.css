@@ -1,8 +1,10 @@
 /* apps/extension/src/popup/popup.css */
 
-/* ─── Default Popup Window: Spacious Widescreen 780px ─────────────────────── */
+/* ─── Default Popup Window: Fixed & Stable 480px ─────────────────────── */
 html, body {
-  width: 780px;
+  width: 480px;
+  min-width: 480px;
+  max-width: 480px;
   min-height: 580px;
   height: 580px;
   max-height: 600px;
@@ -17,7 +19,9 @@ html, body {
 #root {
   display: flex;
   flex-direction: column;
-  width: 100%;
+  width: 480px;
+  min-width: 480px;
+  max-width: 480px;
   height: 100%;
   max-height: 600px;
 }
@@ -155,15 +159,17 @@ html, body {
   background: var(--ssense-header-bg);
 }
 
-/* ─── Maximized Widescreen Mode (Stretches fluidly, never constrained) ──── */
-@media (min-width: 781px), (min-height: 601px) {
+/* ─── Maximized Widescreen Mode (When opened as full browser tab) ──── */
+@media (min-width: 820px) {
   html, body {
-    width: 100%;
-    min-height: 100vh;
-    height: 100%;
-    max-height: none;
-    overflow-y: auto;
-    background: var(--ssense-bg-deep);
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    min-height: 100vh !important;
+    height: 100% !important;
+    max-height: none !important;
+    overflow-y: auto !important;
+    background: var(--ssense-bg-deep) !important;
   }
 
   #root {
