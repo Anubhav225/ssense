@@ -1,4 +1,5 @@
 // apps/extension/src/ui/hooks.ts — data hooks shared by every extension surface.
+import './mock-chrome';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SiteHistoryEntry } from '../background/history-store';
