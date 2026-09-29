@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react';
 import { ChatInterface, DESIGN_SYSTEM_CSS } from './components/ChatInterface';
 import { HistoryView } from './components/HistoryView';
 import PrivacyView from './components/PrivacyView';
+import Options from '../options/Options';
 import { BrandMark, Spinner } from '../ui/components';
 import { GoogleButton, SignInError, SignInPromise, useGoogleSignIn } from '../ui/SignIn';
 import { useActiveTab, useAuth, usePrefs, useTheme } from '../ui/hooks';
 
-type View = 'audit' | 'history' | 'privacy';
+type View = 'audit' | 'history' | 'privacy' | 'settings';
 
 export function SignInGate({ onDone }: { onDone: () => void }) {
   const { busy, error, signIn } = useGoogleSignIn(onDone);
@@ -47,7 +48,7 @@ function App() {
   useEffect(() => {
     const apply = async () => {
       const requested = (await chrome.storage.local.get('ssense_sidepanel_view')).ssense_sidepanel_view;
-      if (requested === 'history' || requested === 'privacy' || requested === 'audit') setView(requested);
+      if (requested === 'history' || requested === 'privacy' || requested === 'audit' || requested === 'settings') setView(requested);
       if (requested) chrome.storage.local.remove('ssense_sidepanel_view');
     };
     void apply();
@@ -60,7 +61,8 @@ function App() {
 
   if (view === 'history') return <HistoryView onBack={() => setView('audit')} onOpenPrivacy={(d) => { setDomain(d); setView('privacy'); }} />;
   if (view === 'privacy' && domain) return <PrivacyView domain={domain} onBack={() => setView('history')} />;
-  return <ChatInterface onOpenHistory={() => setView('history')} onOpenPrivacy={() => setView('privacy')} />;
+  if (view === 'settings') return <Options onBack={() => setView('audit')} />;
+  return <ChatInterface onOpenHistory={() => setView('history')} onOpenPrivacy={() => setView('privacy')} onOpenSettings={() => setView('settings')} />;
 }
 
 export default App;

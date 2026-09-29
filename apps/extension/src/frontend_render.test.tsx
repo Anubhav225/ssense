@@ -32,7 +32,7 @@ describe('Frontend Surfaces Local Integration Tests', () => {
 
     expect(container.textContent).toContain('Ssense');
     expect(container.textContent).toContain('DPDP Act 2023');
-    expect(container.textContent).toContain('Scan sites automatically');
+    expect(container.textContent).toContain('You’re protected.');
   });
 
   it('renders Popup interface with tabs and active site', async () => {
@@ -60,7 +60,9 @@ describe('Frontend Surfaces Local Integration Tests', () => {
     expect(container.textContent).toContain('Scanning');
     expect(container.textContent).toContain('Sync & devices');
     expect(container.textContent).toContain('Appearance');
-    expect(container.textContent).toContain('Server');
+    expect(container.textContent).toContain('About');
+    expect(container.textContent).not.toContain('Use my own server');
+    expect(container.textContent).not.toContain('Delete my synced data');
     expect(container.textContent).toContain('anubhavdas11c05@gmail.com');
   });
 

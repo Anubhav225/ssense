@@ -465,7 +465,7 @@ const MessageBubble = React.memo(({ msg }: { msg: { role: 'user' | 'ai'; text: s
 // ═══════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════
-export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy?: () => void }> = ({ onOpenHistory, onOpenPrivacy }) => {
+export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy?: () => void; onOpenSettings?: () => void }> = ({ onOpenHistory, onOpenPrivacy, onOpenSettings }) => {
   const [domain, setDomain]               = useState<string | null>(null);
   const [isSystemPage, setIsSystemPage]   = useState(false);
   const [trustScore, setTrustScore]       = useState<number | null>(null);
@@ -964,7 +964,7 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
         <div className="ssense-service-banner">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
           <span>{serviceError || 'Ssense AI is unavailable. Check Settings.'}</span>
-          <button onClick={() => chrome.runtime.openOptionsPage()} style={{ marginLeft:'auto', background:'transparent', border:'1px solid rgba(244,63,94,0.4)', color:'var(--ssense-accent-rose)', borderRadius:6, padding:'3px 8px', fontSize:10, cursor:'pointer', flexShrink:0 }}>Settings</button>
+          <button onClick={() => onOpenSettings ? onOpenSettings() : chrome.runtime.openOptionsPage()} style={{ marginLeft:'auto', background:'transparent', border:'1px solid rgba(244,63,94,0.4)', color:'var(--ssense-accent-rose)', borderRadius:6, padding:'3px 8px', fontSize:10, cursor:'pointer', flexShrink:0 }}>Settings</button>
         </div>
       )}
 
@@ -980,20 +980,12 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
               {!isSystemPage && <ComplianceBadge score={trustScore} delta={scoreDelta} />}
             </div>
           </div>
-          <button
-            className="ssense-toolbar-btn"
-            onClick={() => chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') })}
-            title="Maximize / Open in full tab"
-            style={{ padding: '4px 9px', fontSize: 11 }}
-          >
-            <span>⛶</span><span>Maximize</span>
-          </button>
         </div>
 
         <nav className="ssense-toolbar">
           <button className="ssense-toolbar-btn" onClick={onOpenHistory} title="Past audits and browsing history"><span>🕘</span><span>History</span></button>
           <button className="ssense-toolbar-btn" onClick={onOpenPrivacy} title="View retrieved privacy policy text"><span>🔎</span><span>Policy</span></button>
-          <button className="ssense-toolbar-btn" onClick={() => chrome.runtime.openOptionsPage()} title="Server configuration"><span>⚙️</span><span>Settings</span></button>
+          <button className="ssense-toolbar-btn" onClick={() => onOpenSettings ? onOpenSettings() : chrome.runtime.openOptionsPage()} title="Settings"><span>⚙️</span><span>Settings</span></button>
           <span className="ssense-toolbar-spacer" />
           {chatQuota && (
             <span

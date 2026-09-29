@@ -1,7 +1,7 @@
 // apps/extension/src/options/Options.tsx — Settings (public v1)
 //
 // Sections: Account · Scanning · Alerts & protection · Sync & devices · Appearance ·
-// Privacy & data · Server (advanced) · About. Every toggle saves immediately.
+// About. Every toggle saves immediately.
 
 import React, { useEffect, useState } from 'react';
 import { Avatar, BrandMark, ConfirmButton, Icon, Spinner, Switch, Toast, useToast } from '../ui/components';
@@ -9,13 +9,16 @@ import { GoogleButton, SignInError, SignInPromise, useGoogleSignIn } from '../ui
 import { send, useAuth, usePrefs, useSyncState, useTheme } from '../ui/hooks';
 import { formatRelative } from '../utils/status';
 import { normaliseDomain } from '../utils/domain';
+import './options.css';
 
 const NAV: [string, string, string][] = [
-  ['account', 'Account', 'lock'], ['scanning', 'Scanning', 'scan'], ['alerts', 'Alerts & protection', 'bell'],
-  ['sync', 'Sync & devices', 'sync'], ['appearance', 'Appearance', 'sparkle'], ['data', 'Privacy & data', 'shield'],
-  ['server', 'Server', 'globe'], ['about', 'About', 'check'],
+  ['account', 'Account', 'lock'],
+  ['scanning', 'Scanning', 'scan'],
+  ['alerts', 'Alerts & protection', 'bell'],
+  ['sync', 'Sync & devices', 'sync'],
+  ['appearance', 'Appearance', 'sparkle'],
+  ['about', 'About', 'check'],
 ];
-const OVERRIDE_KEYS = ['ssense_override_enabled', 'ssense_server_url', 'ssense_api_key', 'ssense_hmac_secret'];
 
 const Item: React.FC<{ title: string; hint?: string; children: React.ReactNode }> = ({ title, hint, children }) => (
   <div className="op-item"><div style={{ minWidth: 0, flex: 1 }}><b>{title}</b>{hint && <small>{hint}</small>}</div>{children}</div>
@@ -24,7 +27,7 @@ const Section: React.FC<{ id: string; title: string; desc?: string; children: Re
   <section className="op-sec" id={id}><h2 className="sx-display">{title}</h2>{desc && <p>{desc}</p>}<div className="sx-card op-list">{children}</div></section>
 );
 
-export default function Options() {
+export default function Options({ onBack }: { onBack?: () => void } = {}) {
   const { auth, reload } = useAuth();
   const { prefs, update } = usePrefs();
   const { state: sync, syncNow } = useSyncState();
@@ -33,29 +36,25 @@ export default function Options() {
   const [section, setSection] = useState('account');
   const [devices, setDevices] = useState<any[]>([]);
   const [ignoreInput, setIgnoreInput] = useState('');
-  const [serverUrl, setServerUrl] = useState('');
-  const [activeUrl, setActiveUrl] = useState('');
-  const [override, setOverride] = useState(false);
-  const [apiKey, setApiKey] = useState('');
-  const [hmac, setHmac] = useState('');
-  const [test, setTest] = useState<'idle' | 'busy' | 'ok' | 'fail'>('idle');
   const { busy, error, signIn } = useGoogleSignIn(() => { void reload(); show('Signed in'); });
   const version = chrome.runtime.getManifest?.().version ?? '1.0.0';
 
   const set = (patch: Parameters<typeof update>[0]) => { void update(patch); show('Saved'); };
 
   useEffect(() => {
-    chrome.storage.local.get(OVERRIDE_KEYS).then((d) => {
-      setOverride(Boolean(d.ssense_override_enabled)); setServerUrl(d.ssense_server_url || ''); setApiKey(d.ssense_api_key && d.ssense_override_enabled ? d.ssense_api_key : ''); setHmac(d.ssense_hmac_secret && d.ssense_override_enabled ? d.ssense_hmac_secret : '');
-    });
-    void send<any>({ type: 'GET_ENGINE_CONFIG' }).then((r) => r?.url && setActiveUrl(r.url));
-  }, []);
-  useEffect(() => { if (auth?.signedIn) void send<any>({ type: 'GET_USER_PROFILE' }).then((r) => setDevices(r?.profile?.devices || [])); }, [auth?.signedIn, sync?.lastSyncAt]);
+    if (auth?.signedIn) void send<any>({ type: 'GET_USER_PROFILE' }).then((r) => setDevices(r?.profile?.devices || []));
+  }, [auth?.signedIn, sync?.lastSyncAt]);
 
   useEffect(() => {
     const ids = NAV.map(([id]) => id);
-    const io = new IntersectionObserver((es) => { const v = es.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0]; if (v) setSection(v.target.id); }, { rootMargin: '-10% 0px -70% 0px' });
-    ids.forEach((id) => { const el = document.getElementById(id); if (el) io.observe(el); });
+    const io = new IntersectionObserver((es) => {
+      const v = es.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+      if (v) setSection(v.target.id);
+    }, { rootMargin: '-10% 0px -70% 0px' });
+    ids.forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) io.observe(el);
+    });
     return () => io.disconnect();
   }, [prefs === null]);
 
@@ -66,20 +65,11 @@ export default function Options() {
     setIgnoreInput('');
   };
 
-  const saveServer = async () => {
-    try {
-      const u = new URL(serverUrl.trim());
-      if (!/^https?:$/.test(u.protocol)) throw new Error();
-    } catch { show('Enter a valid http(s) URL'); return; }
-    if (override && (!apiKey.trim() || !hmac.trim())) { show('API key and HMAC secret are required'); return; }
-    if (override) await chrome.storage.local.set({ ssense_override_enabled: true, ssense_server_url: serverUrl.trim().replace(/\/$/, ''), ssense_api_key: apiKey.trim(), ssense_hmac_secret: hmac.trim(), ssense_auth_provider: 'custom' });
-    else await chrome.storage.local.remove(['ssense_override_enabled', 'ssense_server_url']);
-    show('Server saved'); void reload();
-    void send<any>({ type: 'GET_ENGINE_CONFIG' }).then((r) => r?.url && setActiveUrl(r.url));
-  };
-  const testConn = async () => { setTest('busy'); const r = await send<any>({ type: 'HEALTH_CHECK' }); setTest(r?.success ? 'ok' : 'fail'); };
-
   const handleBackToBrowsing = async () => {
+    if (onBack) {
+      onBack();
+      return;
+    }
     try {
       const tabs = await chrome.tabs.query({ currentWindow: true });
       const browsingTab = tabs.find((t) => t.url && t.url.startsWith('http') && !t.url.includes('chrome-extension://'));
@@ -122,15 +112,27 @@ export default function Options() {
             justifyContent: 'flex-start',
             transition: 'all 0.15s ease'
           }}
-          title="Return to your active webpage / browsing tab"
+          title={onBack ? 'Return to chat' : 'Return to your active webpage / browsing tab'}
         >
           <Icon name="arrowLeft" size={14} />
-          <span>← Back to Browsing</span>
+          <span>{onBack ? '← Back to Chat' : '← Back to Browsing'}</span>
         </button>
 
-        <div className="op-brand" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}><BrandMark size={32} /><div className="sx-display" style={{ fontSize: 18 }}>Settings</div></div>
+        <div className="op-brand" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
+          <BrandMark size={32} />
+          <div className="sx-display" style={{ fontSize: 18 }}>Settings</div>
+        </div>
         {NAV.map(([id, label, icon]) => (
-          <a key={id} href={`#${id}`} aria-current={section === id} onClick={(e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' }); setSection(id); }}>
+          <a
+            key={id}
+            href={`#${id}`}
+            aria-current={section === id}
+            onClick={(e) => {
+              e.preventDefault();
+              document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
+              setSection(id);
+            }}
+          >
             <Icon name={icon} size={15} />{label}
           </a>
         ))}
@@ -142,19 +144,10 @@ export default function Options() {
             className="sx-btn sx-btn--ghost sx-btn--sm"
             onClick={handleBackToBrowsing}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 650, color: 'var(--ssense-accent-cyan)' }}
-            title="Return to your active webpage"
+            title={onBack ? 'Return to chat' : 'Return to your active webpage'}
           >
             <Icon name="arrowLeft" size={14} />
-            <span>← Back to Browsing</span>
-          </button>
-          <button
-            className="sx-btn sx-btn--ghost sx-btn--sm"
-            onClick={() => chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') })}
-            title="Open Widescreen Dashboard in a new tab"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-          >
-            <Icon name="maximize" size={13} />
-            <span>Open Dashboard</span>
+            <span>{onBack ? '← Back to Chat' : '← Back to Browsing'}</span>
           </button>
         </div>
 
@@ -256,29 +249,6 @@ export default function Options() {
               ))}
             </div>
           </Item>
-        </Section>
-
-        <Section id="data" title="Privacy & data" desc="Only a site’s public privacy-policy address is sent for auditing. Browsing history, page content and form input never leave your browser.">
-          <Item title="Clear history on this device" hint="Removes visited sites and saved audits here. Synced copies stay in your account."><ConfirmButton size="sm" icon="trash" label="Clear local data" confirmLabel="Clear" onConfirm={async () => { await send({ type: 'CLEAR_HISTORY' }); show('Local data cleared'); }} /></Item>
-          <Item title="Delete my synced data" hint="Permanently removes your history and settings from the Ssense server. Other devices keep their local copy."><ConfirmButton size="sm" icon="trash" label="Delete cloud data" confirmLabel="Delete" disabled={!auth.signedIn} onConfirm={async () => { const r = await send<any>({ type: 'DELETE_CLOUD_DATA' }); show(r?.success ? 'Cloud data deleted' : r?.error || 'Failed'); }} /></Item>
-        </Section>
-
-        <Section id="server" title="Server" desc="Advanced. Only change this if you run your own Ssense server.">
-          <Item title="Active server" hint={activeUrl || '…'}><span className="sx-pill sx-tone-muted">{override ? 'Self-hosted' : 'Ssense Cloud'}</span></Item>
-          <Item title="Use my own server"><Switch label="Custom server" checked={override} onChange={setOverride} /></Item>
-          {override && (
-            <div style={{ display: 'grid', gap: 9, padding: '4px 0 14px' }}>
-              <input className="sx-input sx-mono" value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} placeholder="https://your-server.example.com" aria-label="Server URL" spellCheck={false} />
-              <input className="sx-input sx-mono" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="API key" aria-label="API key" autoComplete="off" />
-              <input className="sx-input sx-mono" type="password" value={hmac} onChange={(e) => setHmac(e.target.value)} placeholder="HMAC secret" aria-label="HMAC secret" autoComplete="off" />
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: 8, padding: '12px 0', alignItems: 'center' }}>
-            <button className="sx-btn sx-btn--primary sx-btn--sm" onClick={saveServer}>Save</button>
-            <button className="sx-btn sx-btn--sm" onClick={testConn} disabled={test === 'busy'}>{test === 'busy' ? <Spinner size={13} /> : null} Test connection</button>
-            {test === 'ok' && <span className="sx-pill sx-tone-ok"><i />Connected</span>}
-            {test === 'fail' && <span className="sx-pill sx-tone-bad"><i />Unreachable</span>}
-          </div>
         </Section>
 
         <Section id="about" title="About">
