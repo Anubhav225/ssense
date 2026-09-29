@@ -1,6 +1,7 @@
 // apps/extension/src/sidebar/components/ChatInterface.tsx
 
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import { Icon } from '../../ui/components';
 import type { AuditReport, RateLimitInfo } from '../../types/server-protocol';
 import { normaliseDomain } from '../../utils/domain';
 
@@ -513,6 +514,80 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
   const [chatQuota, setChatQuota]         = useState<RateLimitInfo | null>(null);
   const [cooldownUntil, setCooldownUntil] = useState<number | null>(null);
   const [cooldownLeft, setCooldownLeft]   = useState(0);
+  const [isMaximized, setIsMaximized]     = useState(false);
+
+  useEffect(() => {
+    const updateMaxState = () => {
+      if (typeof document !== 'undefined' && document.fullscreenElement) {
+        setIsMaximized(true);
+        return;
+      }
+      try {
+        chrome.windows?.getCurrent?.().then(w => {
+          setIsMaximized(w.state === 'maximized' || w.state === 'fullscreen');
+        }).catch(() => {});
+      } catch {}
+    };
+
+    updateMaxState();
+    document.addEventListener('fullscreenchange', updateMaxState);
+    window.addEventListener('resize', updateMaxState);
+    return () => {
+      document.removeEventListener('fullscreenchange', updateMaxState);
+      window.removeEventListener('resize', updateMaxState);
+    };
+  }, []);
+
+  const handleMaximize = async () => {
+    // 1. If currently in HTML5 fullscreen, exit it
+    if (document.fullscreenElement) {
+      try {
+        await document.exitFullscreen();
+        setIsMaximized(false);
+        return;
+      } catch {}
+    }
+
+    // 2. If already in a wide window or popup (not locked in the narrow sidepanel)
+    if (window.innerWidth >= 600) {
+      try {
+        const curr = await chrome.windows.getCurrent();
+        if (curr?.id !== undefined) {
+          const nextState = (curr.state === 'maximized' || curr.state === 'fullscreen') ? 'normal' : 'maximized';
+          await chrome.windows.update(curr.id, { state: nextState });
+          setIsMaximized(nextState === 'maximized');
+          return;
+        }
+      } catch {}
+      try {
+        await document.documentElement.requestFullscreen();
+        setIsMaximized(true);
+        return;
+      } catch {}
+    }
+
+    // 3. If in the docked sidepanel (where every edge is locked):
+    // Open a dedicated window maximized in Chrome where every edge is extendable by mouse
+    try {
+      const screenWidth = window.screen?.availWidth || 1280;
+      const screenHeight = window.screen?.availHeight || 800;
+      await chrome.windows.create({
+        url: chrome.runtime.getURL('sidepanel.html?mode=maximized'),
+        type: 'popup',
+        state: 'maximized',
+        width: screenWidth,
+        height: screenHeight,
+        focused: true,
+      });
+    } catch {
+      try {
+        await document.documentElement.requestFullscreen();
+        setIsMaximized(true);
+      } catch {
+        chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') });
+      }
+    }
+  };
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const currentDomainRef = useRef<string | null>(null);
@@ -964,7 +1039,10 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
         <div className="ssense-service-banner">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
           <span>{serviceError || 'Ssense AI is unavailable. Check Settings.'}</span>
-          <button onClick={() => onOpenSettings ? onOpenSettings() : chrome.runtime.openOptionsPage()} style={{ marginLeft:'auto', background:'transparent', border:'1px solid rgba(244,63,94,0.4)', color:'var(--ssense-accent-rose)', borderRadius:6, padding:'3px 8px', fontSize:10, cursor:'pointer', flexShrink:0 }}>Settings</button>
+          <button onClick={() => onOpenSettings ? onOpenSettings() : chrome.runtime.openOptionsPage()} style={{ marginLeft:'auto', background:'transparent', border:'1px solid rgba(244,63,94,0.4)', color:'var(--ssense-accent-rose)', borderRadius:6, padding:'3px 8px', fontSize:10, cursor:'pointer', flexShrink:0, display:'inline-flex', alignItems:'center', gap:4 }}>
+            <Icon name="settings" size={11} />
+            <span>Settings</span>
+          </button>
         </div>
       )}
 
@@ -980,12 +1058,24 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
               {!isSystemPage && <ComplianceBadge score={trustScore} delta={scoreDelta} />}
             </div>
           </div>
+          <button
+            className="ssense-toolbar-btn"
+            onClick={handleMaximize}
+            title={isMaximized ? 'Restore window size' : 'Maximize full screen in Chrome (all edges extendable)'}
+            style={{ padding: '4px 9px', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 5 }}
+          >
+            <Icon name={isMaximized ? 'collapse' : 'maximize'} size={13} />
+            <span>{isMaximized ? 'Restore' : 'Maximize'}</span>
+          </button>
         </div>
 
         <nav className="ssense-toolbar">
           <button className="ssense-toolbar-btn" onClick={onOpenHistory} title="Past audits and browsing history"><span>🕘</span><span>History</span></button>
           <button className="ssense-toolbar-btn" onClick={onOpenPrivacy} title="View retrieved privacy policy text"><span>🔎</span><span>Policy</span></button>
-          <button className="ssense-toolbar-btn" onClick={() => onOpenSettings ? onOpenSettings() : chrome.runtime.openOptionsPage()} title="Settings"><span>⚙️</span><span>Settings</span></button>
+          <button className="ssense-toolbar-btn" onClick={() => onOpenSettings ? onOpenSettings() : chrome.runtime.openOptionsPage()} title="Settings">
+            <Icon name="settings" size={13} />
+            <span>Settings</span>
+          </button>
           <span className="ssense-toolbar-spacer" />
           {chatQuota && (
             <span

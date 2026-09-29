@@ -4,7 +4,7 @@
 // About. Every toggle saves immediately.
 
 import React, { useEffect, useState } from 'react';
-import { Avatar, BrandMark, ConfirmButton, Icon, Spinner, Switch, Toast, useToast } from '../ui/components';
+import { Avatar, ConfirmButton, Icon, Spinner, Switch, Toast, useToast } from '../ui/components';
 import { GoogleButton, SignInError, SignInPromise, useGoogleSignIn } from '../ui/SignIn';
 import { send, useAuth, usePrefs, useSyncState, useTheme } from '../ui/hooks';
 import { formatRelative } from '../utils/status';
@@ -119,7 +119,19 @@ export default function Options({ onBack }: { onBack?: () => void } = {}) {
         </button>
 
         <div className="op-brand" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
-          <BrandMark size={32} />
+          <div style={{
+            width: 32,
+            height: 32,
+            borderRadius: 9,
+            background: 'var(--ssense-gradient-ai)',
+            display: 'grid',
+            placeItems: 'center',
+            color: '#ffffff',
+            boxShadow: '0 2px 8px rgba(6, 182, 212, 0.25)',
+            flexShrink: 0
+          }}>
+            <Icon name="settings" size={18} />
+          </div>
           <div className="sx-display" style={{ fontSize: 18 }}>Settings</div>
         </div>
         {NAV.map(([id, label, icon]) => (
@@ -139,17 +151,6 @@ export default function Options({ onBack }: { onBack?: () => void } = {}) {
       </nav>
 
       <main className="op-main">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 14, marginBottom: 16, borderBottom: '1px solid var(--ssense-border)' }}>
-          <button
-            className="sx-btn sx-btn--ghost sx-btn--sm"
-            onClick={handleBackToBrowsing}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 650, color: 'var(--ssense-accent-cyan)' }}
-            title={onBack ? 'Return to chat' : 'Return to your active webpage'}
-          >
-            <Icon name="arrowLeft" size={14} />
-            <span>{onBack ? '← Back to Chat' : '← Back to Browsing'}</span>
-          </button>
-        </div>
 
         <Section id="account" title="Account" desc="Signing in with Google keeps your history and settings on every device you use.">
           {auth.signedIn ? (
