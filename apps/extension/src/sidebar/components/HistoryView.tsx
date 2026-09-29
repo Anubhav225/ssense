@@ -37,18 +37,26 @@ const Trend: React.FC<{ points?: { timestamp: number; score: number }[] }> = ({ 
   const xs = points.map((_, i) => pad + (i / (points.length - 1)) * (W - pad * 2));
   const ys = points.map((p) => H - pad - (p.score / 100) * (H - pad * 2));
   const d = xs.map((x, i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${ys[i].toFixed(1)}`).join(' ');
+  const areaD = `${d} L${xs[xs.length - 1]},${H} L${xs[0]},${H} Z`;
   const last = points[points.length - 1], first = points[0];
   const delta = last.score - first.score;
   return (
     <div>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" role="img" aria-label={`Score changed from ${first.score} to ${last.score}`}>
+        <defs>
+          <linearGradient id="trend-grad" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="var(--ssense-accent)" stopOpacity={0.3} />
+            <stop offset="100%" stopColor="var(--ssense-accent)" stopOpacity={0.0} />
+          </linearGradient>
+        </defs>
         <line x1={pad} x2={W - pad} y1={H - pad - 0.8 * (H - pad * 2)} y2={H - pad - 0.8 * (H - pad * 2)} stroke="var(--ssense-border-strong)" strokeDasharray="2 4" />
+        <path d={areaD} fill="url(#trend-grad)" />
         <path d={d} fill="none" stroke="var(--ssense-accent)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
         {xs.map((x, i) => <circle key={i} cx={x} cy={ys[i]} r={i === xs.length - 1 ? 3.5 : 2} fill="var(--ssense-accent)" />)}
       </svg>
-      <div className="sx-muted" style={{ fontSize: 11, display: 'flex', justifyContent: 'space-between' }}>
+      <div className="sx-muted" style={{ fontSize: 11, display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
         <span>{points.length} audits · since {new Date(first.timestamp).toLocaleDateString()}</span>
-        <b style={{ color: delta >= 0 ? 'var(--ssense-accent-emerald)' : 'var(--ssense-accent-rose)' }}>{delta >= 0 ? '+' : ''}{delta} pts</b>
+        <b style={{ color: delta >= 0 ? 'var(--ssense-accent-emerald)' : 'var(--ssense-accent-rose)' }}>{delta > 0 ? '+' : ''}{delta} pts</b>
       </div>
     </div>
   );
@@ -126,10 +134,22 @@ const SiteCard: React.FC<{
         </>
       }>
       <div className="hv-site-body">
-        <div className="hv-kv4">
-          {([['Visits', String(e.visitCount)], ['Time', formatDuration(e.totalTimeMs)], ['Last audit', e.lastAuditAt ? formatRelative(e.lastAuditAt) : '—'], ['First seen', new Date(e.firstVisit).toLocaleDateString()]] as const).map(([k, v]) => (
-            <div key={k} className="sx-kv"><span className="sx-eyebrow" style={{ fontSize: 9.5 }}>{k}</span><b>{v}</b></div>
-          ))}
+        <div style={{ background: 'var(--ssense-bg-elevated)', padding: 14, borderRadius: 10, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="sx-eyebrow" style={{ fontSize: 10 }}>Activity Timeline & Info</div>
+          
+          <div style={{ display: 'flex', alignItems: 'center', padding: '0 4px', marginTop: 4 }}>
+             <div style={{ flex: 1, height: 2, background: 'var(--ssense-border-strong)', position: 'relative', borderRadius: 2 }}>
+               <div style={{ position: 'absolute', left: '0%', top: -4, width: 10, height: 10, borderRadius: '50%', background: 'var(--ssense-text-muted)', boxShadow: '0 0 0 2px var(--ssense-bg-elevated)' }} title="First seen" />
+               {e.lastAuditAt && <div style={{ position: 'absolute', left: '50%', top: -4, width: 10, height: 10, transform: 'translateX(-50%)', borderRadius: '50%', background: 'var(--ssense-info)', boxShadow: '0 0 0 2px var(--ssense-bg-elevated)' }} title="Last audited" />}
+               <div style={{ position: 'absolute', right: '0%', top: -4, width: 10, height: 10, borderRadius: '50%', background: 'var(--ssense-accent)', boxShadow: '0 0 0 2px var(--ssense-bg-elevated)' }} title="Last visit" />
+             </div>
+          </div>
+          
+          <div className="hv-kv4" style={{ marginTop: 2 }}>
+            {([['First seen', new Date(e.firstVisit).toLocaleDateString()], ['Last audit', e.lastAuditAt ? formatRelative(e.lastAuditAt) : '—'], ['Last visit', formatRelative(e.lastVisit)], ['Usage', `${e.visitCount} visits · ${formatDuration(e.totalTimeMs)}`]] as const).map(([k, v]) => (
+              <div key={k} className="sx-kv"><span className="sx-eyebrow" style={{ fontSize: 9.5 }}>{k}</span><b>{v}</b></div>
+            ))}
+          </div>
         </div>
 
         <div className="hv-actions">
