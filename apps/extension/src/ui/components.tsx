@@ -55,7 +55,7 @@ export const GoogleG: React.FC<{ size?: number }> = ({ size = 18 }) => (
 
 export const BrandMark: React.FC<{ size?: number }> = ({ size = 30 }) => (
   <div style={{ width: size, height: size, borderRadius: size * 0.3, background: 'var(--ssense-gradient-ai)', display: 'grid', placeItems: 'center', color: 'var(--ssense-accent-ink)', flexShrink: 0 }}>
-    <Icon name="shield" size={size * 0.55} />
+    <Icon name="settings" size={size * 0.55} />
   </div>
 );
 

@@ -137,17 +137,34 @@ const SiteCard: React.FC<{
         <div style={{ background: 'var(--ssense-bg-elevated)', padding: 14, borderRadius: 10, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div className="sx-eyebrow" style={{ fontSize: 10 }}>Activity Timeline & Info</div>
           
-          <div style={{ display: 'flex', alignItems: 'center', padding: '0 4px', marginTop: 4 }}>
-             <div style={{ flex: 1, height: 2, background: 'var(--ssense-border-strong)', position: 'relative', borderRadius: 2 }}>
-               <div style={{ position: 'absolute', left: '0%', top: -4, width: 10, height: 10, borderRadius: '50%', background: 'var(--ssense-text-muted)', boxShadow: '0 0 0 2px var(--ssense-bg-elevated)' }} title="First seen" />
-               {e.lastAuditAt && <div style={{ position: 'absolute', left: '50%', top: -4, width: 10, height: 10, transform: 'translateX(-50%)', borderRadius: '50%', background: 'var(--ssense-info)', boxShadow: '0 0 0 2px var(--ssense-bg-elevated)' }} title="Last audited" />}
-               <div style={{ position: 'absolute', right: '0%', top: -4, width: 10, height: 10, borderRadius: '50%', background: 'var(--ssense-accent)', boxShadow: '0 0 0 2px var(--ssense-bg-elevated)' }} title="Last visit" />
-             </div>
+          <div style={{ padding: '0 4px', marginTop: 12 }}>
+            <div style={{ position: 'relative', height: 28 }}>
+              {/* Line */}
+              <div style={{ position: 'absolute', top: 13, left: '5%', right: '5%', height: 2, background: 'linear-gradient(90deg, rgba(120,120,128,0.2) 0%, var(--ssense-accent) 50%, rgba(120,120,128,0.2) 100%)', borderRadius: 2 }} />
+              {/* Nodes */}
+              <div style={{ position: 'absolute', top: 9, left: '5%', display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateX(-50%)' }}>
+                <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--ssense-text-muted)', boxShadow: '0 0 0 3px var(--ssense-bg-elevated)', zIndex: 2 }} />
+                <span style={{ fontSize: 9, color: 'var(--ssense-text-muted)', marginTop: 4, whiteSpace: 'nowrap' }}>First Seen</span>
+              </div>
+              {e.lastAuditAt && (
+                <div style={{ position: 'absolute', top: 9, left: '50%', display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateX(-50%)' }}>
+                  <div style={{ width: 12, height: 12, borderRadius: '50%', background: 'var(--ssense-info)', boxShadow: '0 0 0 3px var(--ssense-bg-elevated)', zIndex: 2, animation: 'ssense-pulse 2s infinite' }} />
+                  <span style={{ fontSize: 9, color: 'var(--ssense-text-secondary)', marginTop: 3, whiteSpace: 'nowrap', fontWeight: 600 }}>Last Audit</span>
+                </div>
+              )}
+              <div style={{ position: 'absolute', top: 9, left: '95%', display: 'flex', flexDirection: 'column', alignItems: 'center', transform: 'translateX(-50%)' }}>
+                <div style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--ssense-accent)', boxShadow: '0 0 0 3px var(--ssense-bg-elevated)', zIndex: 2 }} />
+                <span style={{ fontSize: 9, color: 'var(--ssense-accent)', marginTop: 4, whiteSpace: 'nowrap', fontWeight: 600 }}>Last Visit</span>
+              </div>
+            </div>
           </div>
           
-          <div className="hv-kv4" style={{ marginTop: 2 }}>
-            {([['First seen', new Date(e.firstVisit).toLocaleDateString()], ['Last audit', e.lastAuditAt ? formatRelative(e.lastAuditAt) : '—'], ['Last visit', formatRelative(e.lastVisit)], ['Usage', `${e.visitCount} visits · ${formatDuration(e.totalTimeMs)}`]] as const).map(([k, v]) => (
-              <div key={k} className="sx-kv"><span className="sx-eyebrow" style={{ fontSize: 9.5 }}>{k}</span><b>{v}</b></div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8, marginTop: 12 }}>
+            {([['First seen', new Date(e.firstVisit).toLocaleDateString()], ['Last audit', e.lastAuditAt ? formatRelative(e.lastAuditAt) : '—'], ['Last visit', formatRelative(e.lastVisit)], ['Usage', `${e.visitCount} visits`], ['Time Spent', formatDuration(e.totalTimeMs)]] as const).map(([k, v]) => (
+              <div key={k} style={{ background: 'var(--ssense-bg-surface)', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--ssense-border)', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span style={{ fontSize: 9.5, color: 'var(--ssense-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 700 }}>{k}</span>
+                <span style={{ fontSize: 11.5, fontWeight: 650, color: 'var(--ssense-text-primary)' }}>{v}</span>
+              </div>
             ))}
           </div>
         </div>

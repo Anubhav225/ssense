@@ -539,7 +539,6 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
   }, []);
 
   const handleMaximize = async () => {
-    // 1. If currently in HTML5 fullscreen, exit it
     if (document.fullscreenElement) {
       try {
         await document.exitFullscreen();
@@ -548,7 +547,6 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
       } catch {}
     }
 
-    // 2. If already in a wide window or popup (not locked in the narrow sidepanel)
     if (window.innerWidth >= 600) {
       try {
         const curr = await chrome.windows.getCurrent();
@@ -566,27 +564,8 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
       } catch {}
     }
 
-    // 3. If in the docked sidepanel (where every edge is locked):
-    // Open a dedicated window maximized in Chrome where every edge is extendable by mouse
-    try {
-      const screenWidth = window.screen?.availWidth || 1280;
-      const screenHeight = window.screen?.availHeight || 800;
-      await chrome.windows.create({
-        url: chrome.runtime.getURL('sidepanel.html?mode=maximized'),
-        type: 'popup',
-        state: 'maximized',
-        width: screenWidth,
-        height: screenHeight,
-        focused: true,
-      });
-    } catch {
-      try {
-        await document.documentElement.requestFullscreen();
-        setIsMaximized(true);
-      } catch {
-        chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') });
-      }
-    }
+    // Open sidepanel in a full tab for maximum space and standard window behavior
+    chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel.html') });
   };
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1051,7 +1030,7 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
         <div className="ssense-header-top">
           <div className="ssense-header-left">
             <div className="ssense-header-icon">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <Icon name="settings" size={16} style={{ color: 'white', strokeWidth: 2.5 }} />
             </div>
             <div className="ssense-header-info">
               <div className="ssense-domain">{isSystemPage ? 'System Page' : (domain || 'Detecting…')}</div>

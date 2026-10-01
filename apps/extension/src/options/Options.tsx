@@ -4,10 +4,9 @@
 // About. Every toggle saves immediately.
 
 import React, { useEffect, useState } from 'react';
-import { Avatar, ConfirmButton, Icon, Spinner, Switch, Toast, useToast } from '../ui/components';
+import { Avatar, Icon, Spinner, Switch, Toast, useToast } from '../ui/components';
 import { GoogleButton, SignInError, SignInPromise, useGoogleSignIn } from '../ui/SignIn';
 import { send, useAuth, usePrefs, useSyncState, useTheme } from '../ui/hooks';
-import { formatRelative } from '../utils/status';
 import { normaliseDomain } from '../utils/domain';
 import './options.css';
 
@@ -30,20 +29,16 @@ const Section: React.FC<{ id: string; title: string; desc?: string; children: Re
 export default function Options({ onBack }: { onBack?: () => void } = {}) {
   const { auth, reload } = useAuth();
   const { prefs, update } = usePrefs();
-  const { state: sync, syncNow } = useSyncState();
+  useSyncState();
   const { msg, show } = useToast();
   useTheme(prefs?.theme);
   const [section, setSection] = useState('account');
-  const [devices, setDevices] = useState<any[]>([]);
   const [ignoreInput, setIgnoreInput] = useState('');
   const { busy, error, signIn } = useGoogleSignIn(() => { void reload(); show('Signed in'); });
   const version = chrome.runtime.getManifest?.().version ?? '1.0.0';
 
   const set = (patch: Parameters<typeof update>[0]) => { void update(patch); show('Saved'); };
 
-  useEffect(() => {
-    if (auth?.signedIn) void send<any>({ type: 'GET_USER_PROFILE' }).then((r) => setDevices(r?.profile?.devices || []));
-  }, [auth?.signedIn, sync?.lastSyncAt]);
 
   useEffect(() => {
     const ids = NAV.map(([id]) => id);
@@ -115,7 +110,7 @@ export default function Options({ onBack }: { onBack?: () => void } = {}) {
           title={onBack ? 'Return to chat' : 'Return to your active webpage / browsing tab'}
         >
           <Icon name="arrowLeft" size={14} />
-          <span>{onBack ? '← Back to Chat' : '← Back to Browsing'}</span>
+          <span>{onBack ? 'Back to Chat' : 'Back to Browsing'}</span>
         </button>
 
         <div className="op-brand" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 18 }}>
@@ -160,12 +155,11 @@ export default function Options({ onBack }: { onBack?: () => void } = {}) {
                   <Avatar name={auth.name} email={auth.email} url={auth.avatarUrl} size={44} />
                   <div style={{ minWidth: 0 }}><b>{auth.name || 'Signed in'}</b><small className="sx-trunc">{auth.email}</small></div>
                 </div>
-                <span className="sx-pill sx-tone-ok"><i />{auth.provider === 'google' ? 'Google account' : 'Custom server'}</span>
+                <span className="sx-pill sx-tone-ok"><i />Google account</span>
               </div>
-              <Item title="Sign out" hint="Removes this device’s credentials. You can keep or erase the audit history stored here.">
+              <Item title="Sign out" hint="Removes this device’s credentials.">
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <button className="sx-btn sx-btn--sm" onClick={async () => { await send({ type: 'SIGN_OUT', keepLocalData: true }); await reload(); }}><Icon name="logout" size={14} /> Sign out, keep data</button>
-                  <ConfirmButton size="sm" label="Sign out & erase" confirmLabel="Erase" onConfirm={async () => { await send({ type: 'SIGN_OUT', keepLocalData: false }); await reload(); }} />
+                  <button className="sx-btn sx-btn--sm" onClick={async () => { await send({ type: 'SIGN_OUT', keepLocalData: true }); await reload(); }}><Icon name="logout" size={14} /> Sign out</button>
                 </div>
               </Item>
             </>
@@ -222,25 +216,7 @@ export default function Options({ onBack }: { onBack?: () => void } = {}) {
           <Item title="Score on toolbar icon" hint="Show the trust score as a badge."><Switch label="Toolbar badge" checked={prefs.showBadge} onChange={(v) => set({ showBadge: v })} /></Item>
         </Section>
 
-        <Section id="sync" title="Sync & devices" desc="History and settings follow your Google account across every browser where Ssense is installed.">
-          <Item title="Sync my data" hint="Audit results, scan status, visit counts and these settings. Page content is never synced."><Switch label="Sync" checked={prefs.syncEnabled} onChange={(v) => { set({ syncEnabled: v }); if (v) void syncNow(); }} /></Item>
-          <Item title={sync?.status === 'syncing' ? 'Syncing…' : sync?.status === 'error' ? 'Last sync failed' : sync?.lastSyncAt ? `Synced ${formatRelative(sync.lastSyncAt)}` : 'Not synced yet'}
-            hint={sync?.lastError || (sync?.lastSyncAt ? `↑ ${sync.pushed} sent · ↓ ${sync.pulled} received in the last sync` : 'Sync runs automatically every 15 minutes and after each scan.')}>
-            <button className="sx-btn sx-btn--sm" onClick={async () => { await syncNow(); show('Sync finished'); }} disabled={!auth.signedIn || !prefs.syncEnabled || sync?.status === 'syncing'}>
-              {sync?.status === 'syncing' ? <Spinner size={13} /> : <Icon name="sync" size={13} />} Sync now
-            </button>
-          </Item>
-          <div style={{ padding: '14px 0', display: 'grid', gap: 8 }}>
-            <b style={{ fontSize: 14 }}>Your devices</b>
-            {devices.length === 0 ? <span className="sx-muted" style={{ fontSize: 12.5 }}>{auth.signedIn ? 'Devices appear after their first sign-in.' : 'Sign in to see your devices.'}</span> : devices.map((d) => (
-              <div key={d.device_id} className="sx-kv" style={{ gridTemplateColumns: 'auto 1fr auto', alignItems: 'center', gap: 10 }}>
-                <Icon name="device" size={16} /><b className="sx-trunc">{d.device_name || 'Device'}</b>
-                <span className="sx-muted" style={{ fontSize: 11.5 }}>{d.last_active_at ? formatRelative(d.last_active_at * 1000) : ''}</span>
-              </div>
-            ))}
-            <small className="sx-muted" style={{ fontSize: 12, lineHeight: 1.5 }}>Phones and tablets: sync works on any Chromium browser that supports extensions and Google sign-in (for example Kiwi Browser on Android). Chrome for Android doesn’t run extensions.</small>
-          </div>
-        </Section>
+
 
         <Section id="appearance" title="Appearance">
           <Item title="Theme" hint="Follow your system or choose one.">

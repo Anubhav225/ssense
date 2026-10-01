@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { ChatInterface, DESIGN_SYSTEM_CSS } from './components/ChatInterface';
 import { HistoryView } from './components/HistoryView';
 import PrivacyView from './components/PrivacyView';
-import Options from '../options/Options';
 import { BrandMark, Spinner } from '../ui/components';
 import { GoogleButton, SignInError, SignInPromise, useGoogleSignIn } from '../ui/SignIn';
 import { useActiveTab, useAuth, usePrefs, useTheme } from '../ui/hooks';
@@ -61,8 +60,7 @@ function App() {
 
   if (view === 'history') return <HistoryView onBack={() => setView('audit')} onOpenPrivacy={(d) => { setDomain(d); setView('privacy'); }} />;
   if (view === 'privacy' && domain) return <PrivacyView domain={domain} onBack={() => setView('history')} />;
-  if (view === 'settings') return <Options onBack={() => setView('audit')} />;
-  return <ChatInterface onOpenHistory={() => setView('history')} onOpenPrivacy={() => setView('privacy')} onOpenSettings={() => setView('settings')} />;
+  return <ChatInterface onOpenHistory={() => setView('history')} onOpenPrivacy={() => setView('privacy')} onOpenSettings={() => chrome.runtime.openOptionsPage()} />;
 }
 
 export default App;
