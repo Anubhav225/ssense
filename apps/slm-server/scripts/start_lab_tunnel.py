@@ -81,10 +81,21 @@ def find_or_download_cloudflared() -> str:
     return ""
 
 
+def normalize_url(url: str) -> str:
+    url = url.strip()
+    if not url:
+        return ""
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
+    return url.rstrip("/")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Start global HTTPS tunnel for Ssense SLM Server")
     parser.add_argument("--port", type=int, default=8000, help="Local server port (default: 8000)")
     parser.add_argument("--token", type=str, default=os.getenv("CLOUDFLARE_TUNNEL_TOKEN", ""), help="Cloudflare Zero Trust token (optional)")
+    parser.add_argument("--domain", type=str, default=os.getenv("CLOUDFLARE_DOMAIN", ""), help="Custom domain / public endpoint (e.g., api.yourdomain.com or https://slm.yourdomain.com)")
+    parser.add_argument("--no-build", action="store_true", help="Skip automatic extension rebuild after domain sync")
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -97,6 +108,17 @@ def main():
     print("🚀 Ssense Global Tunnel & Domain Synchronizer")
     print("═══════════════════════════════════════════════════════════════════")
 
+    custom_domain = normalize_url(args.domain)
+    # Check if a custom domain was previously configured in server .env (not trycloudflare.com)
+    if not custom_domain and server_env.exists():
+        for line in server_env.read_text(encoding="utf-8").splitlines():
+            if line.startswith("SSENSE_PUBLIC_URL=") and "trycloudflare.com" not in line:
+                val = line.split("=", 1)[1].strip()
+                if val:
+                    custom_domain = normalize_url(val)
+                    print(f"📌 Detected existing specified domain from server .env: {custom_domain}")
+                    break
+
     cloudflared = find_or_download_cloudflared()
     if not cloudflared:
         print("\n❌ Could not locate cloudflared binary. Please install cloudflared to start tunnel.")
@@ -108,7 +130,10 @@ def main():
         print(f"🔒 Starting named tunnel with Cloudflare Zero Trust token...")
     else:
         cmd.extend(["--url", f"http://127.0.0.1:{args.port}"])
-        print(f"🌐 Starting Quick Tunnel on port {args.port} (free, no domain needed)...")
+        if custom_domain:
+            print(f"🌐 Starting tunnel for specified endpoint: {custom_domain} (forwarding to port {args.port})...")
+        else:
+            print(f"🌐 Starting Quick Tunnel on port {args.port} (free, no domain needed)...")
 
     proc = subprocess.Popen(
         cmd,
@@ -120,23 +145,27 @@ def main():
     )
 
     tunnel_url = None
-    url_pattern = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
+    if custom_domain:
+        # User explicitly specified a permanent domain / proper endpoint
+        tunnel_url = custom_domain
+        print(f"\n🎯 Using specified domain endpoint: {tunnel_url}")
+    else:
+        url_pattern = re.compile(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com")
+        print("⏳ Waiting for public tunnel domain assignment...")
+        start_time = time.time()
 
-    print("⏳ Waiting for public tunnel domain assignment...")
-    start_time = time.time()
-
-    while time.time() - start_time < 30:
-        line = proc.stdout.readline()
-        if not line:
-            break
-        match = url_pattern.search(line)
-        if match:
-            tunnel_url = match.group(0)
-            break
+        while time.time() - start_time < 30:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            match = url_pattern.search(line)
+            if match:
+                tunnel_url = match.group(0)
+                break
 
     if not tunnel_url:
-        print("⚠️  Could not automatically extract trycloudflare.com URL from output.")
-        print("   If you are using a custom domain token, set SSENSE_PUBLIC_URL directly.")
+        print("⚠️  Could not automatically extract tunnel URL from output.")
+        print("   If you are using a custom domain token, specify --domain or set SSENSE_PUBLIC_URL directly.")
     else:
         print("\n" + "=" * 65)
         print(f"🎉 TUNNEL ACTIVE: {tunnel_url}")
@@ -157,11 +186,25 @@ def main():
             update_env_file(root_env, "VITE_SSENSE_SERVER_URL", tunnel_url)
             print(f"   ✅ Root .env updated with VITE_SSENSE_SERVER_URL={tunnel_url}")
 
+        if not args.no_build:
+            print("\n🔨 Building extension with the synchronized endpoint...")
+            try:
+                npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
+                subprocess.run(
+                    [npm_cmd, "run", "build"],
+                    cwd=str(project_root / "apps" / "extension"),
+                    check=True,
+                    shell=(sys.platform == "win32"),
+                )
+                print("   ✅ Extension built successfully in apps/extension/dist!")
+            except Exception as e:
+                print(f"   ⚠️  Extension build failed or npm not in PATH: {e}")
+
         print("\n💡 What to do next:")
         print("   1. Keep this tunnel process running on your AGX Spark / lab machine.")
-        print("   2. Build the extension: cd apps/extension && npm run build")
+        print(f"   2. Connect to proper endpoint: {tunnel_url}/v1/health")
         print("   3. Install the extension on any laptop anywhere in the world.")
-        print("   4. The extension will automatically connect to your lab server over HTTPS!")
+        print("   4. The extension is now pre-configured to connect over HTTPS!")
 
     try:
         proc.wait()

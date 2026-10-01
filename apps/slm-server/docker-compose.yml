@@ -120,7 +120,7 @@ services:
   # ─────────────────────────────────────────────────────────────
   slm-server-gpu:
     <<: *slm-common
-    profiles: [ "gpu" ]
+    profiles: [ "gpu", "gpu-tunnel" ]
     build:
       context: .
       dockerfile: Dockerfile.gpu
@@ -197,7 +197,7 @@ services:
 
   nginx-gpu:
     <<: *nginx-common
-    profiles: [ "gpu" ]
+    profiles: [ "gpu", "gpu-tunnel" ]
     container_name: ssense-nginx-proxy-gpu
     volumes:
       - ./nginx/nginx.gpu.conf:/etc/nginx/nginx.conf:ro
@@ -211,7 +211,7 @@ services:
   # ─────────────────────────────────────────────────────────────
   slm-server-jetson:
     <<: *slm-common
-    profiles: [ "jetson" ]
+    profiles: [ "jetson", "jetson-tunnel" ]
     build:
       context: .
       dockerfile: Dockerfile.jetson
@@ -262,7 +262,7 @@ services:
 
   nginx-jetson:
     <<: *nginx-common
-    profiles: [ "jetson" ]
+    profiles: [ "jetson", "jetson-tunnel" ]
     container_name: ssense-nginx-proxy-jetson
     volumes:
       - ./nginx/nginx.jetson.conf:/etc/nginx/nginx.conf:ro
@@ -276,7 +276,7 @@ services:
   # ─────────────────────────────────────────────────────────────
   slm-server-cpu:
     <<: *slm-common
-    profiles: [ "cpu" ]
+    profiles: [ "cpu", "cpu-tunnel" ]
     build:
       context: .
       dockerfile: Dockerfile.cpu
@@ -308,7 +308,7 @@ services:
 
   nginx-cpu:
     <<: *nginx-common
-    profiles: [ "cpu" ]
+    profiles: [ "cpu", "cpu-tunnel" ]
     container_name: ssense-nginx-proxy-cpu
     volumes:
       - ./nginx/nginx.cpu.conf:/etc/nginx/nginx.conf:ro
@@ -331,7 +331,9 @@ services:
     profiles: [ "tunnel", "jetson-tunnel", "gpu-tunnel", "cpu-tunnel" ]
     container_name: ssense-cloudflared-tunnel
     network_mode: host
-    command: tunnel --no-autoupdate --url http://127.0.0.1:8000
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
+    command: ${CLOUDFLARE_TUNNEL_CMD:-tunnel --no-autoupdate --url http://127.0.0.1:8000}
 
 volumes:
   # Redis is a rate-limit/nonce cache only (see redis_limiter.py) — safe to

@@ -116,6 +116,8 @@ Ssense/
 
 ## 🚀 Quick Start
 
+> 📖 **New User?** Follow the complete, step-by-step [**Manual Quickstart & Operations Guide (MANUAL_START_GUIDE.md)**](MANUAL_START_GUIDE.md) to start the SLM Server, configure Cloudflare Tunnels (named custom domain or quick tunnel), and load the Chrome Extension.
+
 ### For End Users
 Install from the Chrome Web Store. That's it. Ssense connects to our centrally-hosted server automatically — no key, no URL, no download.
 

@@ -10,3 +10,7 @@ tests/
 nginx/certs/*.key
 models/
 .cache/
+.venv/
+venv/
+data/
+*.db
