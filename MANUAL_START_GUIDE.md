@@ -135,6 +135,11 @@ If you prefer running inside Docker containers with Redis rate-limiting and Ngin
    # Verify that ssense-slm-server-* and ssense-redis report (healthy)
    ```
 
+> ⚡ **Docker "Build Once, Start Instantly" Design**:
+> - Each profile is tagged with persistent image names (`image: ssense-slm-server:cpu`, `ssense-slm-server:gpu`, `ssense-slm-server:jetson`).
+> - After the initial build, running `docker compose --profile <profile> up -d` boots **instantly (< 1 second)** by reusing the existing container image.
+> - Source code is bind-mounted directly from the host (`- .:/app:rw`), meaning **any changes to Python code, schemas, or configs take effect immediately without rebuilding Docker**!
+
 ---
 
 ## 🌐 Step 2: Cloudflare Setup (Global HTTPS Access)
@@ -200,6 +205,22 @@ If testing on the same machine without internet access:
 2. Build the extension:
    ```bash
    cd apps/extension && npm run build
+   ```
+
+### Workflow 2.4: Verifying the Public Connection (Quick Tunnel or Bought Domain)
+
+We provide an automated verification utility (`apps/slm-server/scripts/verify_tunnel.py`):
+
+1. **Verify Quick Tunnel (Random trycloudflare.com Domain)**:
+   ```bash
+   python apps/slm-server/scripts/verify_tunnel.py
+   # Generates a tunnel URL and verifies that https://.../health returns 200 OK over the public internet
+   ```
+
+2. **Verify a Bought Domain (Permanent Endpoint)**:
+   ```bash
+   python apps/slm-server/scripts/verify_tunnel.py --domain https://api.yourdomain.com
+   # Tests your purchased domain endpoint directly over the public internet
    ```
 
 ---
