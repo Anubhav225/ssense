@@ -121,7 +121,6 @@ services:
   slm-server-gpu:
     <<: *slm-common
     profiles: [ "gpu", "gpu-tunnel" ]
-    image: ssense-slm-server:gpu
     build:
       context: .
       dockerfile: Dockerfile.gpu
@@ -213,7 +212,6 @@ services:
   slm-server-jetson:
     <<: *slm-common
     profiles: [ "jetson", "jetson-tunnel" ]
-    image: ssense-slm-server:jetson
     build:
       context: .
       dockerfile: Dockerfile.jetson
@@ -279,7 +277,6 @@ services:
   slm-server-cpu:
     <<: *slm-common
     profiles: [ "cpu", "cpu-tunnel" ]
-    image: ssense-slm-server:cpu
     build:
       context: .
       dockerfile: Dockerfile.cpu
