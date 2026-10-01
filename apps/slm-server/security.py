@@ -585,7 +585,7 @@ def validate_and_repair_report(raw_json_str: str) -> Dict[str, Any]:
         report["violations"] = []
 
     # Filter root keys strictly to the schema contract (strips metadata like schema_version, rules_applied)
-    ALLOWED_ROOT_KEYS = {"global_legal_reasoning", "violations", "dpdp_trust_score", "subtlety_score"}
+    ALLOWED_ROOT_KEYS = {"global_legal_reasoning", "violations", "dpdp_trust_score", "subtlety_score", "explainability"}
     report = {k: v for k, v in report.items() if k in ALLOWED_ROOT_KEYS}
 
     # 5. Strict Structural Validation

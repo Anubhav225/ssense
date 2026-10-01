@@ -88,6 +88,34 @@ export const AuditReportView: React.FC<{ domain: string; onBack: () => void }> =
           </Collapsible>
         )}
 
+        {/* Explainability (XAI) */}
+        {entry.explainability && entry.explainability.features && entry.explainability.features.length > 0 && (
+          <Collapsible open={true} onToggle={() => {}} className="sx-card" style={{ background: 'var(--ssense-bg-surface)' }} headClassName=""
+            header={<span style={{ padding: '9px 10px', fontSize: 13, fontWeight: 650, flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Icon name="sparkle" size={14} style={{ color: 'var(--ssense-accent-violet)' }} /> Explainable AI ({entry.explainability.method})
+            </span>}>
+            <div style={{ padding: '0 12px 12px' }}>
+              <div style={{ display: 'grid', gap: 10 }}>
+                {entry.explainability.features.map((f, i) => (
+                  <div key={i} style={{ background: 'rgba(255,255,255,0.03)', padding: 10, borderRadius: 8, border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: f.evidence ? 6 : 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ssense-text-primary)' }}>{f.feature}</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: typeof f.shap_value === 'number' ? (f.shap_value > 0 ? 'var(--ssense-accent-red)' : 'var(--ssense-accent-green)') : 'var(--ssense-text-primary)' }}>
+                        {typeof f.shap_value === 'number' ? (f.shap_value > 0 ? '+' : '') + f.shap_value.toFixed(2) : f.shap_value}
+                      </div>
+                    </div>
+                    {f.evidence && (
+                      <div style={{ fontSize: 11.5, color: 'var(--ssense-text-secondary)', fontStyle: 'italic', paddingLeft: 8, borderLeft: '2px solid var(--ssense-border)' }}>
+                        "{f.evidence}"
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Collapsible>
+        )}
+
         {/* Violations */}
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>

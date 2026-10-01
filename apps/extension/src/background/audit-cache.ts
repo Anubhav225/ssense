@@ -19,6 +19,7 @@ export interface LocalAuditEntry {
   violation_count: number;
   violations:      AuditReport['violations'];
   global_legal_reasoning: string;
+  explainability?: AuditReport['explainability'];
   policy_url:      string;
   audited_at:      number;   // Unix ms
   age_days:        number;
@@ -132,6 +133,7 @@ export async function saveAudit(
     violation_count: report.violations?.length ?? 0,
     violations:      report.violations ?? [],
     global_legal_reasoning: report.global_legal_reasoning ?? '',
+    explainability:  report.explainability,
     policy_url:      meta.policy_url ?? (prior?.policy_url || ''),
     audited_at:      meta.audited_at ?? Date.now(),
     age_days:        meta.age_days ?? 0,

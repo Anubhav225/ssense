@@ -112,6 +112,30 @@
       "minimum": 0,
       "maximum": 100,
       "description": "A score from 0 to 100 indicating how subtly the violation is camouflaged within corporate jargon (100 being masterfully hidden)."
+    },
+    "explainability": {
+      "type": "object",
+      "description": "Explainable AI (XAI) output indicating feature attributions for the audit.",
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["SHAP", "LIME", "Attention Rollout", "Integrated Gradients"],
+          "description": "The XAI method used for feature attribution."
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "feature": { "type": "string", "description": "The feature or concept identified." },
+              "shap_value": { "type": ["number", "string"], "description": "The attribution score (SHAP value, impact score, etc.)." },
+              "evidence": { "type": "string", "description": "Quote or excerpt showing the feature in context." }
+            },
+            "required": ["feature", "shap_value"]
+          }
+        }
+      },
+      "required": ["method"]
     }
   },
   "required": [

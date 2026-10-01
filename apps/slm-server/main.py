@@ -579,12 +579,33 @@ def recombine_audit_reports(chunk_reports: list[Dict[str, Any]], domain: str) ->
             f"statutory violation(s) under the DPDP Act 2023: {violation_names}. {reasons_text}"
         ).strip()
 
-    return {
+    # Merge explainability if present
+    merged_explainability = None
+    explainabilities = [r.get("explainability") for r in chunk_reports if r.get("explainability")]
+    if explainabilities:
+        method = explainabilities[0].get("method", "SHAP")
+        features = []
+        seen_features = set()
+        for x in explainabilities:
+            for f in x.get("features", []):
+                feature_name = f.get("feature", "").lower()
+                if feature_name and feature_name not in seen_features:
+                    seen_features.add(feature_name)
+                    features.append(f)
+        if features:
+            merged_explainability = {"method": method, "features": features}
+
+    final_report = {
         "global_legal_reasoning": global_reasoning,
         "violations": unique_violations,
         "dpdp_trust_score": dpdp_trust_score,
         "subtlety_score": subtlety_score,
     }
+    
+    if merged_explainability:
+        final_report["explainability"] = merged_explainability
+
+    return final_report
 
 
 def _build_audit_prompt(domain: str, clean_text: str) -> str:
@@ -605,6 +626,7 @@ def _build_audit_prompt(domain: str, clean_text: str) -> str:
         "You are an expert DPDP Act 2023 forensic legal auditor. "
         "Analyze the provided corporate privacy policy for statutory violations under the "
         "Digital Personal Data Protection Act 2023 and DPDP Rules 2025. "
+        "If violations are found, generate an 'explainability' object with XAI feature attributions (e.g. SHAP values) indicating the specific keywords or concepts driving the decision. "
         "Output ONLY a valid JSON object strictly matching the schema contract."
     )
     user_msg = f"[POLICY TO AUDIT: {domain}]\n{policy_slice}"
