@@ -35,9 +35,11 @@ cd "$SCRIPT_DIR/.."   # apps/slm-server — where docker-compose.yml lives
 
 DETACHED="-d"
 FORCE_PROFILE=""
+BUILD_FLAG=""
 for arg in "$@"; do
     case "$arg" in
         --logs)       DETACHED="" ;;
+        --build)      BUILD_FLAG="--build" ;;
         --force-cpu)  FORCE_PROFILE="cpu" ;;
         --force-gpu)  FORCE_PROFILE="gpu" ;;
         --force-jetson) FORCE_PROFILE="jetson" ;;
@@ -107,9 +109,9 @@ fi
 # ------------------------------------------------------------------------------
 # Launch
 # ------------------------------------------------------------------------------
-echo -e "${BLUE}[i] Running: docker compose --profile ${PROFILE} up --build ${DETACHED}${NC}\n"
+echo -e "${BLUE}[i] Running: docker compose --profile ${PROFILE} up ${BUILD_FLAG} ${DETACHED}${NC}\n"
 # shellcheck disable=SC2086
-docker compose --profile "$PROFILE" up --build $DETACHED
+docker compose --profile "$PROFILE" up $BUILD_FLAG $DETACHED
 
 if [ -n "$DETACHED" ]; then
     echo -e "\n${GREEN}[✓] Started in background. Follow logs with:${NC}"

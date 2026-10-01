@@ -17,12 +17,14 @@ The **Ssense SLM Server** provides private, local compliance intelligence. It ex
 4. [Step-by-Step Setup Walkthrough](#step-by-step-setup-walkthrough)
    - [Step 1: Host Prerequisites](#step-1-host-prerequisites)
    - [Step 2: Environment Configuration](#step-2-environment-configuration)
-   - [Step 3: Launching the Server](#step-3-launching-the-server)
+   - [Step 3: Launching the Server (Build Once, Start Instantly)](#step-3-launching-the-server)
    - [Step 4: Health Check & Telemetry Verification](#step-4-health-check--telemetry-verification)
-5. [Worldwide Global Accessibility (No Domain Needed)](#worldwide-global-accessibility-no-domain-needed)
-   - [Workflow A: Quick Zero-Config Tunnel (Recommended)](#workflow-a-quick-zero-config-tunnel-recommended)
-   - [Workflow B: Named Cloudflare Zero Trust Tunnel](#workflow-b-named-cloudflare-zero-trust-tunnel)
+   - [Deploying on Another Computer or AWS EC2](#deploying-on-another-computer-or-aws-ec2)
+5. [Worldwide Global Accessibility & Cloudflare Setup](#worldwide-global-accessibility--cloudflare-setup)
+   - [Workflow A: Quick Zero-Config Tunnel (Ephemeral Domain)](#workflow-a-quick-zero-config-tunnel-ephemeral-domain)
+   - [Workflow B: Named Cloudflare Tunnel (Bought Custom Domain)](#workflow-b-named-cloudflare-tunnel-bought-custom-domain)
    - [Workflow C: Direct Nginx TLS / LAN Access](#workflow-c-direct-nginx-tls--lan-access)
+   - [Verifying Public Cloudflare Edge Connectivity](#verifying-public-cloudflare-edge-connectivity)
 6. [Extension Handshake & Client Registration](#extension-handshake--client-registration)
 7. [API Reference](#api-reference)
    - [Public Endpoints](#public-endpoints)
@@ -294,41 +296,54 @@ SSENSE_ALLOW_REGISTRATION=true
 
 > **Security Note**: Never commit `.env` to git. In production, restrict `SSENSE_ALLOWED_ORIGINS` to your extension's Chrome Extension ID (`chrome-extension://<id>`).
 
-### Step 3: Launching the Server
+### Step 3: Launching the Server (Build Once, Start Instantly)
 
-#### Method A: Automated Detection (Recommended)
+The Ssense Docker stack is architected around a **Build-Once & Instant Start** workflow:
+* **First Run / Fresh Machine**: Docker Compose automatically builds the local project image (e.g. `slm-server-slm-server-cpu`) using BuildKit pip caching.
+* **Subsequent Launches**: Running `docker compose up -d` starts the containers in **< 1 second** directly from the local cached build.
+* **Live Code Reloading**: The repository code is bind-mounted directly (`.:/app:rw`), so changes to Python files take effect immediately inside the container **without rebuilding**.
+* **Zero Remote Registry Dependencies**: The configuration relies purely on local image builds. It **never** pulls from Docker Hub, eliminating `pull access denied for ssense-slm-server` or `docker login` errors.
 
-The deployment script automatically detects whether your system is a Jetson AGX, a discrete GPU host, or a CPU-only machine, and starts the appropriate profile:
+#### Method A: Automated Hardware Detection (Recommended)
+
+The deployment script auto-detects whether your system is an NVIDIA Jetson AGX, a discrete GPU host, or a CPU machine:
 
 * **On Linux / Jetson / macOS**:
   ```bash
   chmod +x scripts/deploy.sh
-  ./scripts/deploy.sh
+  ./scripts/deploy.sh          # Instant start using local cached build
+  ./scripts/deploy.sh --build  # Rebuild image (only if dependencies change)
   ```
 * **On Windows (PowerShell)**:
   ```powershell
   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-  .\scripts\deploy.ps1
+  .\scripts\deploy.ps1         # Instant start using local cached build (< 1s)
+  .\scripts\deploy.ps1 -Build  # Rebuild image (only if dependencies change)
   ```
 
-#### Method B: Explicit Profile Launch
+#### Method B: Explicit Profile Launch via Docker Compose
 
-To bypass detection and start a specific profile directly:
+To start a specific profile directly:
 
 ```bash
+# CPU-Only Host (Intel / AMD / Cloud VPS):
+docker compose --profile cpu up -d
+
+# NVIDIA Discrete GPU (Datacenter / Workstation):
+docker compose --profile gpu up -d
+
 # NVIDIA Jetson AGX Spark / Orin:
-docker compose --profile jetson up --build -d
-
-# Discrete NVIDIA Datacenter/Workstation GPU:
-docker compose --profile gpu up --build -d
-
-# CPU-Only Host:
-docker compose --profile cpu up --build -d
+docker compose --profile jetson up -d
 ```
+
+> **Note on Rebuilding**: Only pass `--build` when you modify `requirements*.txt` or a `Dockerfile`:
+> ```bash
+> docker compose --profile cpu up --build -d
+> ```
 
 ### Step 4: Health Check & Telemetry Verification
 
-Wait for the container initialization and weight loading (typically 60–120 seconds on first run as models download or map into memory). Verify the health endpoint:
+Wait for initial weight loading into memory (typically 30–60 seconds on first model load). Verify the health endpoint:
 
 ```bash
 curl -s http://localhost:8000/health | python3 -m json.tool
@@ -339,7 +354,8 @@ curl -s http://localhost:8000/health | python3 -m json.tool
 {
   "status": "online",
   "engine_ready": true,
-  "compute_profile": "jetson",
+  "compute_profile": "cpu",
+  "backend": "transformers",
   "rag_ready": true,
   "models_dir": "/app/models",
   "active_inferences": 0,
@@ -354,62 +370,147 @@ curl -s http://localhost:8000/health | python3 -m json.tool
 
 ---
 
-## Worldwide Global Accessibility (No Domain Needed)
+## Deploying on Another Computer or AWS EC2
 
-When running the server in your lab, office, or home on an AGX Spark, remote laptops across town or across the globe need to connect securely over HTTPS. You **do not** need to buy a domain, configure dynamic DNS, or set up router port forwarding.
+Setting up Ssense SLM Server on a new developer workstation, an AWS EC2 instance (e.g. `c6i.2xlarge` for CPU or `g5.xlarge` for GPU), or an on-premise server takes less than 3 minutes:
 
-### Workflow A: Quick Zero-Config Tunnel (Recommended)
+### 1. Prerequisites on Target Host
+Ensure Git and Docker (with Docker Compose v2) are installed:
+```bash
+# Ubuntu / Debian
+sudo apt-get update && sudo apt-get install -y git docker.io docker-compose-v2
+sudo usermod -aG docker $USER && newgrp docker
+```
+*(For GPU instances on AWS, also install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).)*
 
-We provide an automated synchronizer script (`scripts/start_lab_tunnel.py`) that sets up a Cloudflare Quick Tunnel and automatically propagates the public HTTPS URL to both server and extension:
+### 2. Clone Repository
+```bash
+git clone https://github.com/Anubhav225/ssense.git
+cd ssense/apps/slm-server
+```
 
-1. **On the machine running your SLM server**:
+### 3. Generate Cryptographic Environment Keys
+Run the zero-dependency key generator to initialize your `.env`:
+```bash
+chmod +x scripts/generate_keys.sh
+./scripts/generate_keys.sh
+```
+This automatically provisions `SSENSE_API_KEYS`, `SSENSE_HMAC_SECRET`, and `SSENSE_ADMIN_TOKEN`.
+
+### 4. Launch the Server
+```bash
+# On CPU instances (e.g. t3.xlarge, c6i.2xlarge, general Linux):
+docker compose --profile cpu up -d
+
+# On GPU instances (e.g. EC2 g4dn, g5 with NVIDIA GPU):
+docker compose --profile gpu up -d
+```
+Docker Compose builds the local image once and starts the microservice. No `docker login` is required.
+
+### 5. Verify & Connect
+```bash
+curl http://127.0.0.1:8000/health
+```
+All persistent audit data and user accounts are safely stored in `./data/db` on the host filesystem and survive reboots and container upgrades.
+
+---
+
+## Worldwide Global Accessibility & Cloudflare Setup
+
+When running the server in your lab, home, or cloud instance, client laptops and the Ssense Chrome Extension worldwide need to connect securely over HTTPS. You can use an **ephemeral random domain** for testing, or a **bought custom domain** for production.
+
+### Workflow A: Quick Zero-Config Tunnel (Ephemeral Domain)
+
+Use this workflow while testing or developing before purchasing a domain. It creates a temporary public HTTPS URL on Cloudflare Edge:
+
+1. **On the SLM server machine**:
    ```bash
    python scripts/start_lab_tunnel.py --port 8000
    ```
-2. **What this script does automatically**:
-   - Detects or downloads the official `cloudflared` binary.
-   - Launches an encrypted tunnel pointing to `http://127.0.0.1:8000`.
-   - Captures the assigned public URL (e.g., `https://random-words-1234.trycloudflare.com`).
+2. **What happens automatically**:
+   - Detects or downloads the standalone `cloudflared` binary.
+   - Launches an encrypted tunnel routing to `http://127.0.0.1:8000`.
+   - Captures the ephemeral URL (e.g., `https://participated-weighted-desktop-miscellaneous.trycloudflare.com`).
    - Automatically writes `SSENSE_PUBLIC_URL=https://...` into `apps/slm-server/.env`.
    - Automatically writes `VITE_SSENSE_SERVER_URL=https://...` into `apps/extension/.env.production`.
-3. **Build the extension once**:
+   - Triggers extension build so clients are immediately synchronized.
+
+3. **Verify the connection**:
    ```bash
-   cd apps/extension
-   npm run build
+   python scripts/verify_tunnel.py
    ```
-4. **Distribute the extension**: Install `apps/extension/dist` on any laptop in the world. It will connect to your lab server seamlessly over HTTPS.
 
-### Workflow B: Named Cloudflare Zero Trust Tunnel
+### Workflow B: Named Cloudflare Tunnel (Bought Custom Domain)
 
-If you have a free Cloudflare Zero Trust account and want a permanent, static URL (e.g., `https://slm.yourdomain.com`) that never changes across restarts:
+When you purchase a custom domain (e.g. `yourdomain.com` or `api.yourdomain.com`), set up a permanent Cloudflare Named Tunnel that never changes:
 
-1. Create a tunnel in the Cloudflare Zero Trust Dashboard and copy your tunnel token.
-2. In `apps/slm-server/.env`, set:
+1. **Buy and configure domain in Cloudflare**:
+   - Purchase your domain from Cloudflare Registrar, Namecheap, GoDaddy, etc.
+   - In Cloudflare Dashboard, navigate to **Zero Trust** > **Networks** > **Tunnels** > **Create a Tunnel**.
+   - Name the tunnel (e.g., `ssense-production-tunnel`).
+   - Copy the Tunnel Token provided by Cloudflare.
+   - Under **Public Hostnames**, add:
+     - **Subdomain**: `api` (or `slm`)
+     - **Domain**: `yourdomain.com`
+     - **Service Type**: `HTTP`
+     - **URL**: `localhost:8000` (or `127.0.0.1:8000`)
+
+2. **Configure `.env`**:
+   In `apps/slm-server/.env`, set:
    ```ini
-   CLOUDFLARE_TUNNEL_TOKEN=eyJhIjoi...your_token_here...
-   SSENSE_PUBLIC_URL=https://slm.yourdomain.com
+   CLOUDFLARE_TUNNEL_TOKEN=eyJhIjoi...your_cloudflare_token_here...
+   SSENSE_PUBLIC_URL=https://api.yourdomain.com
    ```
-3. Launch with the combined tunnel compose profile:
+
+3. **Launch Docker Stack with Combined Tunnel Profile**:
    ```bash
-   # On Jetson:
-   docker compose --profile jetson-tunnel up --build -d
+   # On CPU host:
+   docker compose --profile cpu-tunnel up -d
 
-   # On Discrete GPU:
-   docker compose --profile gpu-tunnel up --build -d
+   # On Discrete GPU host:
+   docker compose --profile gpu-tunnel up -d
 
-   # On CPU:
-   docker compose --profile cpu-tunnel up --build -d
+   # On Jetson AGX Spark:
+   docker compose --profile jetson-tunnel up -d
    ```
+   This starts the SLM server, Redis, Nginx, and the official `cloudflare/cloudflared` container simultaneously.
+
+4. **Verify Your Custom Domain**:
+   ```bash
+   python scripts/verify_tunnel.py --domain https://api.yourdomain.com
+   ```
+   This script verifies the full round-trip from the public internet through Cloudflare's global edge network into your local server instance.
+
+5. **Sync Extension with Custom Domain**:
+   ```bash
+   python scripts/start_lab_tunnel.py --domain https://api.yourdomain.com
+   ```
+   This writes `VITE_SSENSE_SERVER_URL=https://api.yourdomain.com` to `apps/extension/.env.production` and rebuilds the extension bundle.
 
 ### Workflow C: Direct Nginx TLS / LAN Access
 
-For local intranet deployments where internet access is restricted:
+For local intranet or air-gapped deployments:
 
 1. Generate or place your TLS certificates in `nginx/certs/`:
    ```bash
-   openssl req -x509 -nodes -days 365 -newkey rsa:2048      -keyout nginx/certs/ssense.key      -out nginx/certs/ssense.crt      -subj "/CN=ssense-server.local"
+   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+     -keyout nginx/certs/ssense.key \
+     -out nginx/certs/ssense.crt \
+     -subj "/CN=ssense-server.local"
    ```
 2. Clients connect directly to `https://<host-ip-or-hostname>`.
+
+### Verifying Public Cloudflare Edge Connectivity
+
+Use the automated verification suite [`scripts/verify_tunnel.py`](scripts/verify_tunnel.py) to check tunnel health at any time:
+
+```bash
+# 1. Test random ephemeral trycloudflare.com tunnel:
+python scripts/verify_tunnel.py
+
+# 2. Test bought custom domain tunnel:
+python scripts/verify_tunnel.py --domain https://api.yourdomain.com
+```
 
 ---
 
@@ -735,21 +836,36 @@ The Jetson AGX Spark / Orin platform features a **Unified Memory Architecture (U
 ### Daily Operations Commands
 
 ```bash
+# Instant start using local cached build (< 1s):
+docker compose --profile cpu up -d
+# (or --profile gpu / --profile jetson)
+
+# Start with Cloudflare public tunnel:
+docker compose --profile cpu-tunnel up -d
+# (or --profile gpu-tunnel / --profile jetson-tunnel)
+
+# Rebuild and restart (only when requirements or Dockerfile change):
+docker compose --profile cpu up --build -d
+
 # View live streaming server logs:
-docker compose logs -f slm-server-jetson
-# (or slm-server-gpu / slm-server-cpu)
+docker compose logs -f ssense-slm-server-cpu
+# (or ssense-slm-server-gpu / ssense-slm-server-jetson)
+
+# Check status of running containers:
+docker compose ps
 
 # Graceful restart:
-docker compose restart slm-server-jetson
+docker compose restart ssense-slm-server-cpu
 
-# Rebuild and restart after code updates:
-docker compose --profile jetson up --build -d
-
-# Stop server without losing data:
-docker compose --profile jetson down
+# Stop server without losing database data:
+docker compose --profile cpu down
 
 # Real-time health monitoring:
-watch -n 2 'curl -s http://localhost:8000/health | python3 -m json.tool'
+curl -s http://localhost:8000/health | python3 -m json.tool
+
+# Verify public Cloudflare connection (ephemeral or custom domain):
+python scripts/verify_tunnel.py
+python scripts/verify_tunnel.py --domain https://api.yourdomain.com
 
 # Inspect registered users (admin):
 curl -s -H "X-Ssense-Admin-Token: YOUR_ADMIN_TOKEN" http://localhost:8000/v1/admin/users | python3 -m json.tool

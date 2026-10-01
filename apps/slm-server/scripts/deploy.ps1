@@ -18,7 +18,8 @@
 #             this script doesn't check for it — use deploy.sh on-device.)
 #
 # Usage (from PowerShell, in apps/slm-server or anywhere — it cd's itself):
-#   .\scripts\deploy.ps1                # detect + up -d (detached)
+#   .\scripts\deploy.ps1                # detect + up -d (instant start using cached build)
+#   .\scripts\deploy.ps1 -Build         # rebuild images and restart
 #   .\scripts\deploy.ps1 -Logs          # detect + up (attached, streaming logs)
 #   .\scripts\deploy.ps1 -ForceCpu
 #   .\scripts\deploy.ps1 -ForceGpu
@@ -28,6 +29,7 @@
 # ==============================================================================
 param(
     [switch]$Logs,
+    [switch]$Build,
     [switch]$ForceCpu,
     [switch]$ForceGpu
 )
@@ -109,13 +111,22 @@ if (-not (Test-Path ".env")) {
 # array to a native executable (as opposed to a PowerShell cmdlet/function) is
 # unreliable in Windows PowerShell — it can fragment "-d" into separate "-"
 # and "d" tokens, which is exactly what produced the "no such service: -"
-# error. Two explicit branches avoid the issue entirely.
+$buildArg = if ($Build) { "--build" } else { "" }
+
 if ($Logs) {
-    Write-Info "Running: docker compose --profile $Profile_ up --build`n"
-    docker compose --profile $Profile_ up --build
+    Write-Info "Running: docker compose --profile $Profile_ up $buildArg`n"
+    if ($Build) {
+        docker compose --profile $Profile_ up --build
+    } else {
+        docker compose --profile $Profile_ up
+    }
 } else {
-    Write-Info "Running: docker compose --profile $Profile_ up --build -d`n"
-    docker compose --profile $Profile_ up --build -d
+    Write-Info "Running: docker compose --profile $Profile_ up $buildArg -d`n"
+    if ($Build) {
+        docker compose --profile $Profile_ up --build -d
+    } else {
+        docker compose --profile $Profile_ up -d
+    }
 }
 
 if (-not $Logs) {

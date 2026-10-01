@@ -313,6 +313,9 @@ services:
     volumes:
       - ./nginx/nginx.cpu.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      slm-server-cpu:
+        condition: service_healthy
   # ─────────────────────────────────────────────────────────────
   # OPTIONAL TUNNEL: Cloudflare Tunnel for Global Access
   # Enables the server running on AGX Spark in your lab to be
