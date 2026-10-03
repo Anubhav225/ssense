@@ -15,24 +15,70 @@ if (typeof window !== 'undefined') {
   if (!isExtension) {
     console.info('[Ssense Dev] Initializing local in-browser Chrome API mocks for testing.');
 
-    // ── LocalStorage-backed chrome.storage.local ───────────────────────────
+    // ── LocalStorage-backed chrome.storage.local (with memory fallback) ──
+    const memStore: Record<string, string> = {};
+    const safeStore = {
+      getItem: (k: string): string | null => {
+        try {
+          if (typeof localStorage !== 'undefined' && localStorage && typeof localStorage.getItem === 'function') {
+            return localStorage.getItem(k);
+          }
+        } catch {}
+        return memStore[k] ?? null;
+      },
+      setItem: (k: string, v: string): void => {
+        try {
+          if (typeof localStorage !== 'undefined' && localStorage && typeof localStorage.setItem === 'function') {
+            localStorage.setItem(k, v);
+            return;
+          }
+        } catch {}
+        memStore[k] = v;
+      },
+      removeItem: (k: string): void => {
+        try {
+          if (typeof localStorage !== 'undefined' && localStorage && typeof localStorage.removeItem === 'function') {
+            localStorage.removeItem(k);
+            return;
+          }
+        } catch {}
+        delete memStore[k];
+      },
+      key: (i: number): string | null => {
+        try {
+          if (typeof localStorage !== 'undefined' && localStorage && typeof localStorage.key === 'function') {
+            return localStorage.key(i);
+          }
+        } catch {}
+        return Object.keys(memStore)[i] ?? null;
+      },
+      get length(): number {
+        try {
+          if (typeof localStorage !== 'undefined' && localStorage) {
+            return localStorage.length;
+          }
+        } catch {}
+        return Object.keys(memStore).length;
+      }
+    };
+
     const storageKey = (k: string) => `ssense_dev_${k}`;
     const storage = {
       get: (keys: string | string[] | Record<string, any> | null): Promise<Record<string, any>> => {
         return new Promise((resolve) => {
           const res: Record<string, any> = {};
           if (keys === null) {
-            for (let i = 0; i < localStorage.length; i++) {
-              const k = localStorage.key(i);
+            for (let i = 0; i < safeStore.length; i++) {
+              const k = safeStore.key(i);
               if (k?.startsWith('ssense_dev_')) {
-                const raw = localStorage.getItem(k);
+                const raw = safeStore.getItem(k);
                 try { res[k.replace('ssense_dev_', '')] = JSON.parse(raw!); } catch { res[k.replace('ssense_dev_', '')] = raw; }
               }
             }
           } else {
             const list = Array.isArray(keys) ? keys : typeof keys === 'string' ? [keys] : Object.keys(keys || {});
             for (const k of list) {
-              const raw = localStorage.getItem(storageKey(k));
+              const raw = safeStore.getItem(storageKey(k));
               if (raw !== null) {
                 try { res[k] = JSON.parse(raw); } catch { res[k] = raw; }
               } else if (typeof keys === 'object' && !Array.isArray(keys) && keys[k] !== undefined) {
@@ -46,7 +92,7 @@ if (typeof window !== 'undefined') {
       set: (items: Record<string, any>): Promise<void> => {
         return new Promise((resolve) => {
           for (const [k, v] of Object.entries(items)) {
-            localStorage.setItem(storageKey(k), JSON.stringify(v));
+            safeStore.setItem(storageKey(k), JSON.stringify(v));
           }
           resolve();
         });
@@ -54,15 +100,15 @@ if (typeof window !== 'undefined') {
       remove: (keys: string | string[]): Promise<void> => {
         return new Promise((resolve) => {
           const list = Array.isArray(keys) ? keys : [keys];
-          for (const k of list) localStorage.removeItem(storageKey(k));
+          for (const k of list) safeStore.removeItem(storageKey(k));
           resolve();
         });
       },
       clear: (): Promise<void> => {
         return new Promise((resolve) => {
-          for (let i = localStorage.length - 1; i >= 0; i--) {
-            const k = localStorage.key(i);
-            if (k?.startsWith('ssense_dev_')) localStorage.removeItem(k);
+          for (let i = safeStore.length - 1; i >= 0; i--) {
+            const k = safeStore.key(i);
+            if (k?.startsWith('ssense_dev_')) safeStore.removeItem(k);
           }
           resolve();
         });
@@ -214,7 +260,7 @@ if (typeof window !== 'undefined') {
             };
 
           case 'GET_PREFS': {
-            const raw = localStorage.getItem(storageKey('ssense_prefs'));
+            const raw = safeStore.getItem(storageKey('ssense_prefs'));
             const prefs = raw ? JSON.parse(raw) : {
               autoScan: true,
               showBadge: true,
@@ -230,7 +276,7 @@ if (typeof window !== 'undefined') {
           case 'SET_PREFS': {
             const current = (await w.chrome.runtime.sendMessage({ type: 'GET_PREFS' })).prefs;
             const updated = { ...current, ...(msg.patch || {}) };
-            localStorage.setItem(storageKey('ssense_prefs'), JSON.stringify(updated));
+            safeStore.setItem(storageKey('ssense_prefs'), JSON.stringify(updated));
             return { success: true, prefs: updated };
           }
 

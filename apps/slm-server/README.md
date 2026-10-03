@@ -204,26 +204,33 @@ apps/slm-server/
 
 ## Hardware Profiles & Requirements
 
-The server includes three distinct, production-ready profiles. All profiles run the **same** application code and base models; only the container runtime, base images, and memory parameters differ:
+The server includes a **Universal Dynamic Partitioning Engine** that adapts to any deployment topology. All profiles execute the **exact same** base model (`Qwen2.5-7B-Instruct`) and dual LoRA adapters without quantization loss:
 
-| Profile | Target Hardware | Base Image | GPU Passthrough | Default Concurrency |
+| Profile | Target Hardware | Engine Backend | Memory Strategy | Concurrency Ceiling |
 |---|---|---|---|---|
-| **`jetson`** | NVIDIA Jetson AGX Spark / Orin / Xavier (JetPack 6, L4T r36.x) | `nvcr.io/nvidia/l4t-jetpack:r36.4.0` | `runtime: nvidia` (Unified Memory) | 14 inference slots, 500 queue depth |
-| **`gpu`** | Discrete NVIDIA GPUs (RTX 3090/4090, A100, H100, L40S) | `vllm/vllm-openai:latest` | `deploy.resources.reservations` | 220 inference slots, 20,000 queue depth |
-| **`cpu`** | Intel Xeon, AMD EPYC, Modern x86_64 CPUs with AVX-512 | `python:3.11-slim` | None (OpenMP threading) | 7 inference slots, 300 queue depth |
+| **`gpu`** | High-VRAM NVIDIA Datacenter GPUs (A100, H100, RTX 3090/4090, L40S $\ge 16\text{ GB}$) | vLLM `AsyncLLMEngine` | 100% in VRAM with PagedAttention KV pool | 220 slots, 20,000 queue depth |
+| **`hybrid`** | Discrete GPUs with $< 16\text{ GB}$ VRAM (RTX 3060 12GB, RTX 3070/4060 8GB) | HuggingFace + `accelerate` | Dynamic layer partitioning: ~70% on CUDA, ~30% in host RAM, dedicated VRAM reserved for KV cache | 32 slots, 1,000 queue depth |
+| **`jetson`** | NVIDIA Jetson AGX Spark / Orin (JetPack 6, L4T r36.x unified memory) | vLLM or Unified Partitioned HF | Unified LPDDR5 memory pool with safety headroom cap | 14 slots, 500 queue depth |
+| **`cpu`** | Cloud CPU VMs, Intel Xeon, AMD EPYC (no GPU acceleration) | Native Multi-Threaded HF | 100% host RAM with Prompt Lookup Decoding & KV prefix pre-warm | 7 slots, 300 queue depth |
+
+> 💡 **Automatic Hardware Adaptation (`auto`)**:
+> If launched with `SSENSE_COMPUTE_PROFILE=auto` (or `gpu` on an RTX 3060 12GB), the server probes total VRAM at boot. Since a BF16 7B model requires ~15.2 GB, selecting `gpu` on a 12GB card automatically routes to the `hybrid` dynamic partitioner instead of crashing with a VRAM OOM error.
 
 ### Hardware Minimums & Recommendations
 
-* **NVIDIA Jetson AGX Spark / Orin (Recommended On-Premise Host)**:
+* **Discrete NVIDIA GPU Server (Full VRAM)**:
+  * Minimum: 16 GB VRAM (RTX 4080 / RTX 3090 / A4000).
+  * Recommended: 24 GB+ VRAM (RTX 3090/4090, A5000, A100).
+* **Workstation / Laptop GPU (Dynamic Hybrid Partitioning)**:
+  * Minimum: 8 GB or 12 GB VRAM (RTX 3060, RTX 4060/4070) + 24 GB host RAM.
+  * Dynamically partitions weights between VRAM and system RAM while strictly reserving ~2.4 GB VRAM for the KV cache.
+  * Tunable via `SSENSE_GPU_MAX_MEMORY` (e.g. `9.2GiB`) and `SSENSE_CPU_MAX_MEMORY` (e.g. `24GiB`).
+* **NVIDIA Jetson AGX Spark / Orin (Unified Memory)**:
   * Minimum: 32 GB 128-bit LPDDR5 unified memory.
   * Recommended: 64 GB unified memory.
   * Storage: NVMe SSD with at least 50 GB free space for base weights and cache.
-* **Discrete NVIDIA GPU Server**:
-  * Minimum: 16 GB VRAM (RTX 4080 / RTX 3090) with AWQ/GPTQ or FP8 quantization.
-  * Recommended: 24 GB+ VRAM (RTX 3090/4090, A5000, A100).
-  * Host RAM: 32 GB minimum (allows swap space buffer).
-* **CPU-Only Server**:
-  * Minimum: 8 physical x86_64 cores with AVX-512 support, 32 GB DDR4/DDR5 RAM.
+* **Pure CPU Server**:
+  * Minimum: 8 physical x86_64 cores with AVX2/AVX-512 support, 32 GB DDR4/DDR5 RAM.
   * Recommended: 16+ cores (Intel Sapphire Rapids or AMD EPYC 9004), 64 GB RAM.
 
 ---
@@ -417,28 +424,30 @@ All persistent audit data and user accounts are safely stored in `./data/db` on 
 
 ## Worldwide Global Accessibility & Cloudflare Setup
 
-When running the server in your lab, home, or cloud instance, client laptops and the Ssense Chrome Extension worldwide need to connect securely over HTTPS. You can use an **ephemeral random domain** for testing, or a **bought custom domain** for production.
+When running the server in your lab, home, or cloud instance, client laptops and the Ssense Chrome Extension worldwide need to connect securely over HTTPS. You can use an **ephemeral random domain** for testing, or a **bought custom domain** for production. The Docker setup includes a built-in Cloudflare `tunnel` service.
 
 ### Workflow A: Quick Zero-Config Tunnel (Ephemeral Domain)
 
-Use this workflow while testing or developing before purchasing a domain. It creates a temporary public HTTPS URL on Cloudflare Edge:
+Use this workflow while testing or developing before purchasing a domain. It creates a temporary public HTTPS URL on Cloudflare Edge using the built-in Docker service:
 
-1. **On the SLM server machine**:
+1. **Launch the SLM Server with the Tunnel Profile**:
+   Start your hardware profile along with the tunnel (e.g., for GPU):
    ```bash
-   python scripts/start_lab_tunnel.py --port 8000
+   docker compose --profile gpu-tunnel up -d
    ```
-2. **What happens automatically**:
-   - Detects or downloads the standalone `cloudflared` binary.
-   - Launches an encrypted tunnel routing to `http://127.0.0.1:8000`.
-   - Captures the ephemeral URL (e.g., `https://participated-weighted-desktop-miscellaneous.trycloudflare.com`).
-   - Automatically writes `SSENSE_PUBLIC_URL=https://...` into `apps/slm-server/.env`.
-   - Automatically writes `VITE_SSENSE_SERVER_URL=https://...` into `apps/extension/.env.production`.
-   - Triggers extension build so clients are immediately synchronized.
+   *(Use `cpu-tunnel` or `jetson-tunnel` depending on your hardware).*
 
-3. **Verify the connection**:
+2. **Extract the Random Domain Name**:
+   Cloudflared automatically generates a random `.trycloudflare.com` domain. To find it, view the tunnel container's logs:
    ```bash
-   python scripts/verify_tunnel.py
+   docker logs ssense-cloudflared-tunnel 2>&1 | grep "trycloudflare.com"
    ```
+   You will see an output like:
+   `https://participated-weighted-desktop-miscellaneous.trycloudflare.com`
+
+3. **Configure the Extension**:
+   Copy this URL and set it as `SSENSE_PUBLIC_URL` in your server's `.env`, and as `VITE_SSENSE_SERVER_URL` in the Chrome extension's `.env.production` before building the extension.
+   *(Note: This URL changes every time the tunnel container restarts.)*
 
 ### Workflow B: Named Cloudflare Tunnel (Bought Custom Domain)
 
@@ -461,6 +470,7 @@ When you purchase a custom domain (e.g. `yourdomain.com` or `api.yourdomain.com`
    CLOUDFLARE_TUNNEL_TOKEN=eyJhIjoi...your_cloudflare_token_here...
    SSENSE_PUBLIC_URL=https://api.yourdomain.com
    ```
+   *(When `CLOUDFLARE_TUNNEL_TOKEN` is set, the Docker container automatically switches from Quick Tunnel mode to Named Tunnel mode).*
 
 3. **Launch Docker Stack with Combined Tunnel Profile**:
    ```bash
@@ -475,17 +485,11 @@ When you purchase a custom domain (e.g. `yourdomain.com` or `api.yourdomain.com`
    ```
    This starts the SLM server, Redis, Nginx, and the official `cloudflare/cloudflared` container simultaneously.
 
-4. **Verify Your Custom Domain**:
+4. **Verify Your Custom Domain Connection**:
+   You can verify the connection is active by pinging the tunnel's health endpoint over the public internet:
    ```bash
-   python scripts/verify_tunnel.py --domain https://api.yourdomain.com
+   curl -s https://api.yourdomain.com/health
    ```
-   This script verifies the full round-trip from the public internet through Cloudflare's global edge network into your local server instance.
-
-5. **Sync Extension with Custom Domain**:
-   ```bash
-   python scripts/start_lab_tunnel.py --domain https://api.yourdomain.com
-   ```
-   This writes `VITE_SSENSE_SERVER_URL=https://api.yourdomain.com` to `apps/extension/.env.production` and rebuilds the extension bundle.
 
 ### Workflow C: Direct Nginx TLS / LAN Access
 

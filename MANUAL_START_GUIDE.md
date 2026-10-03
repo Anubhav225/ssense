@@ -23,20 +23,19 @@ This guide provides step-by-step instructions for **new users** and developers t
 
 If you already have your environment ready, run these three terminals:
 
-```bash
-# Terminal 1 — Start the SLM Server
+# Terminal 1 — Start the SLM Server & Cloudflare Tunnel
 cd apps/slm-server
-.venv/Scripts/python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-# (On Linux/macOS: source .venv/bin/activate && uvicorn main:app --host 0.0.0.0 --port 8000)
+# For GPU:
+docker compose --profile gpu-tunnel up -d
+# (Or use cpu-tunnel / jetson-tunnel)
 
-# Terminal 2 — Start the Cloudflare Tunnel & Auto-Sync
-python apps/slm-server/scripts/start_lab_tunnel.py --port 8000
-# (Or with your custom domain: python apps/slm-server/scripts/start_lab_tunnel.py --token YOUR_TOKEN --domain https://api.yourdomain.com)
+# Extract your random trycloudflare.com domain:
+docker logs ssense-cloudflared-tunnel 2>&1 | grep "trycloudflare.com"
 
-# Terminal 3 — Build the Chrome Extension
+# Terminal 2 — Build the Chrome Extension
 cd apps/extension
+# (Update VITE_SSENSE_SERVER_URL in .env.production with your Cloudflare domain first!)
 npm install && npm run build
-```
 
 Then open `chrome://extensions` in Google Chrome, enable **Developer mode**, and click **Load unpacked** pointing to `apps/extension/dist`.
 
@@ -144,54 +143,58 @@ If you prefer running inside Docker containers with Redis rate-limiting and Ngin
 
 ## 🌐 Step 2: Cloudflare Setup (Global HTTPS Access)
 
-Ssense includes an automated tunnel orchestrator (`apps/slm-server/scripts/start_lab_tunnel.py`) that bridges your local or lab server to the outside world and automatically synchronizes endpoints across the repository.
+Ssense includes a built-in Docker service for Cloudflare (`ssense-cloudflared-tunnel`) that bridges your local or lab server to the outside world seamlessly.
 
-### Workflow 2.1: Named Tunnel with a Custom Domain (NOT Random)
+### Workflow 2.1: Free Quick Tunnel (Zero-Config Development)
 
-If you have a Cloudflare Zero Trust account and want a **permanent, stable custom domain** (e.g. `https://api.yourdomain.com` or `https://slm.ssense.dev`) without random URL regenerations on restart:
+If you do **not** have a custom domain and want a free, instant public HTTPS endpoint:
+
+1. **Launch the SLM Server with the Tunnel Profile**:
+   ```bash
+   cd apps/slm-server
+   docker compose --profile gpu-tunnel up -d
+   ```
+   *(Substitute `gpu-tunnel` with `cpu-tunnel` or `jetson-tunnel` depending on your hardware).*
+
+2. **Extract the Random Domain Name**:
+   Cloudflared automatically generates a random `.trycloudflare.com` domain. Find it by viewing the tunnel logs:
+   ```bash
+   docker logs ssense-cloudflared-tunnel 2>&1 | grep "trycloudflare.com"
+   ```
+   Copy the URL it gives you (e.g., `https://participated-weighted...trycloudflare.com`).
+
+3. **Synchronize the Extension**:
+   Paste this URL as `VITE_SSENSE_SERVER_URL` in `apps/extension/.env.production`, and as `SSENSE_PUBLIC_URL` in `apps/slm-server/.env`.
+   Rebuild the extension (`cd apps/extension && npm run build`).
+
+---
+
+### Workflow 2.2: Named Tunnel with a Custom Domain (Production)
+
+If you have a Cloudflare Zero Trust account and want a **permanent, stable custom domain** (e.g. `https://api.yourdomain.com`) without random URL regenerations on restart:
 
 1. **Create a Cloudflare Tunnel**:
    - Go to [Cloudflare Zero Trust Dashboard](https://one.dash.cloudflare.com/) > **Networks** > **Tunnels**.
    - Click **Create a Tunnel** > Select **Cloudflared**.
    - Name your tunnel (e.g. `ssense-backend`).
    - Copy the provided **Tunnel Token** (starts with `eyJhIjoi...`).
-   - Add a Public Hostname pointing to:
-     - Subdomain / Domain: `api.yourdomain.com`
-     - Service Type: `HTTP`
-     - URL: `localhost:8000` (or `127.0.0.1:8000`)
+   - Add a Public Hostname pointing to `localhost:8000`.
 
-2. **Start the Named Tunnel with Domain Synchronization**:
-   ```bash
-   python apps/slm-server/scripts/start_lab_tunnel.py --token <YOUR_CLOUDFLARE_TUNNEL_TOKEN> --domain https://api.yourdomain.com
+2. **Configure `.env`**:
+   In `apps/slm-server/.env`, set:
+   ```ini
+   CLOUDFLARE_TUNNEL_TOKEN=eyJhIjoi...your_cloudflare_token_here...
+   SSENSE_PUBLIC_URL=https://api.yourdomain.com
    ```
 
-   **What happens automatically**:
-   - Connects securely to Cloudflare via your token.
-   - Configures the custom domain endpoint: `https://api.yourdomain.com`.
-   - Automatically writes `SSENSE_PUBLIC_URL=https://api.yourdomain.com` into `apps/slm-server/.env`.
-   - Automatically writes `VITE_SSENSE_SERVER_URL=https://api.yourdomain.com` into:
-     - `apps/extension/.env.production`
-     - `apps/extension/.env`
-     - Root `.env`
-   - Automatically triggers `npm run build` for the Chrome Extension so it is instantly compiled with your custom domain!
-
----
-
-### Workflow 2.2: Free Quick Tunnel (Zero-Config Development)
-
-If you do **not** have a custom domain and want a free, instant public HTTPS endpoint:
-
-1. **Run the script**:
+3. **Launch Docker Stack with Combined Tunnel Profile**:
    ```bash
-   python apps/slm-server/scripts/start_lab_tunnel.py --port 8000
+   docker compose --profile gpu-tunnel up -d
    ```
+   *(The Docker container automatically switches to Named Tunnel mode because `CLOUDFLARE_TUNNEL_TOKEN` is present).*
 
-2. **What this does**:
-   - Locates or downloads the official `cloudflared` binary.
-   - Spawns an encrypted quick tunnel on port 8000.
-   - Captures the assigned public URL (e.g. `https://example-words-1234.trycloudflare.com`).
-   - Automatically updates all server and extension `.env` files with that URL.
-   - Auto-builds the extension so it is immediately ready to load in Chrome.
+4. **Synchronize the Extension**:
+   Set `VITE_SSENSE_SERVER_URL=https://api.yourdomain.com` in `apps/extension/.env.production` and build the extension.
 
 ---
 
@@ -207,21 +210,13 @@ If testing on the same machine without internet access:
    cd apps/extension && npm run build
    ```
 
-### Workflow 2.4: Verifying the Public Connection (Quick Tunnel or Bought Domain)
+### Workflow 2.4: Verifying the Public Connection
 
-We provide an automated verification utility (`apps/slm-server/scripts/verify_tunnel.py`):
-
-1. **Verify Quick Tunnel (Random trycloudflare.com Domain)**:
-   ```bash
-   python apps/slm-server/scripts/verify_tunnel.py
-   # Generates a tunnel URL and verifies that https://.../health returns 200 OK over the public internet
-   ```
-
-2. **Verify a Bought Domain (Permanent Endpoint)**:
-   ```bash
-   python apps/slm-server/scripts/verify_tunnel.py --domain https://api.yourdomain.com
-   # Tests your purchased domain endpoint directly over the public internet
-   ```
+You can verify the connection is active by pinging the tunnel's health endpoint over the public internet:
+```bash
+curl -s https://api.yourdomain.com/health
+# Or curl your random trycloudflare.com/health URL
+```
 
 ---
 

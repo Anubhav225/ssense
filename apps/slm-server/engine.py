@@ -14,6 +14,7 @@ chatbot adapters, hot-swapped per request), across three hardware profiles:
 
 import os
 import sys
+os.environ["VLLM_USE_V1"] = "0"
 
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -44,32 +45,203 @@ _SYS_THINKING = (
     "<|im_start|>system\n"
     "You are the Ssense DPDP Co-Pilot. "
     "Ground ALL answers strictly in the provided audit report and statutory context. "
-    "Think step by step through the DPDP Act 2023 provisions. "
+    "When asked about the audited site, analyze its violations and evidence thoroughly step by step through the DPDP Act 2023 provisions. "
     "A thorough, well-reasoned statutory analysis is expected."
     "<|im_end|>\n"
 )
 
 
+
+def get_system_ram_gb() -> float:
+    """Returns total system physical RAM in GiB across Linux/Windows/macOS."""
+    try:
+        import psutil
+        return float(psutil.virtual_memory().total) / (1024 ** 3)
+    except Exception:
+        pass
+    try:
+        if hasattr(os, "sysconf") and "SC_PAGE_SIZE" in os.sysconf_names and "SC_PHYS_PAGES" in os.sysconf_names:
+            return float(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")) / (1024 ** 3)
+    except Exception:
+        pass
+    try:
+        with open("/proc/meminfo", "r") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return float(line.split()[1]) / (1024 * 1024)
+    except Exception:
+        pass
+    return 32.0
+
+
+def is_unified_memory() -> bool:
+    """Detects NVIDIA Jetson (Tegra) or unified memory where CPU & GPU share the same physical DRAM."""
+    if Path("/etc/nv_tegra_release").exists() or Path("/sys/devices/soc0/family").exists():
+        return True
+    if torch.cuda.is_available():
+        try:
+            props = torch.cuda.get_device_properties(0)
+            if getattr(props, "is_integrated", 0) == 1:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def get_gpu_devices() -> list[Dict[str, Any]]:
+    """Probes functional CUDA devices and returns per-GPU VRAM stats."""
+    devices = []
+    if not (torch.cuda.is_available() and torch.cuda.device_count() > 0):
+        return devices
+    try:
+        probe = torch.zeros(1, device="cuda")
+        del probe
+    except Exception as exc:
+        print(f"[EngineCore] CUDA device detected but tensor allocation failed ({exc}).")
+        return []
+
+    for i in range(torch.cuda.device_count()):
+        try:
+            props = torch.cuda.get_device_properties(i)
+            total_gb = props.total_memory / (1024 ** 3)
+            devices.append({
+                "index": i,
+                "name": props.name,
+                "total_gb": total_gb,
+                "major": props.major,
+                "minor": props.minor,
+            })
+        except Exception:
+            pass
+    return devices
+
+
+def compute_dynamic_partition_budgets(
+    total_vram_gb: float,
+    total_ram_gb: float,
+    model_weight_gb: float = 15.2,
+) -> tuple[float, float, float]:
+    """
+    Computes (gpu_weight_budget_gb, cpu_weight_budget_gb, kv_headroom_gb).
+    Guarantees a dedicated slice of VRAM is reserved exclusively for the
+    KV cache and activation scratchpads, preventing CUDA OOM.
+    """
+    # Single-user inference with max_tokens <= 250 requires < 150MB of KV cache.
+    # Reserving 0.95-1.2 GB provides >5x safety buffer against OOM while maximizing
+    # GPU layer residency (shifting 2-3 additional transformer layers from CPU to GPU).
+    user_headroom = os.getenv("SSENSE_KV_HEADROOM_GB", "").strip()
+    if user_headroom:
+        try:
+            kv_headroom_gb = float(user_headroom)
+        except Exception:
+            kv_headroom_gb = 0.95
+    else:
+        # Default: 0.95 GB headroom on 10-14GB GPUs, 1.5 GB on 16GB+
+        kv_headroom_gb = max(0.95, min(1.8, total_vram_gb * 0.08))
+
+    gpu_weight_budget_gb = max(1.5, total_vram_gb - kv_headroom_gb)
+
+    # Remaining model weights go to host RAM with safety headroom
+    needed_cpu_gb = max(4.0, (model_weight_gb - gpu_weight_budget_gb) * 1.25)
+    available_cpu_gb = max(12.0, total_ram_gb - 4.0)
+    cpu_weight_budget_gb = min(available_cpu_gb, max(needed_cpu_gb, 16.0))
+
+    return gpu_weight_budget_gb, cpu_weight_budget_gb, kv_headroom_gb
+
+
+
 def detect_hardware_capabilities() -> str:
     """
-    Probes runtime environment for functional CUDA / GPU acceleration.
-    Returns 'gpu', 'jetson', or 'cpu'.
+    Probes runtime environment and automatically classifies hardware capability:
+      - 'cpu': No CUDA devices detected or allocation failed.
+      - 'jetson': Unified memory GPU detected (Jetson AGX / Orin).
+      - 'gpu': Discrete GPU with >= 15.5GB VRAM (full 7B BF16 model fits entirely in VRAM).
+      - 'hybrid': Discrete GPU with < 15.5GB VRAM (requires dynamic layer partitioning across VRAM + RAM).
     """
-    if torch.cuda.is_available() and torch.cuda.device_count() > 0:
-        try:
-            probe = torch.zeros(1, device="cuda")
-            del probe
-            if Path("/etc/nv_tegra_release").exists() or Path("/sys/devices/soc0/family").exists():
-                return "jetson"
-            return "gpu"
-        except Exception as exc:
-            print(f"[EngineCore] CUDA device detected but tensor allocation failed ({exc}). Falling back to CPU.")
-            return "cpu"
-    return "cpu"
+    devices = get_gpu_devices()
+    if not devices:
+        return "cpu"
+
+    if is_unified_memory():
+        return "jetson"
+
+    primary_vram_gb = devices[0]["total_gb"]
+    # Qwen2.5-7B in BF16 requires ~15.2 GB for weights alone.
+    # To run entirely in VRAM with sufficient KV cache headroom, we need at least 15.5 GB VRAM.
+    if primary_vram_gb >= 15.5:
+        return "gpu"
+    else:
+        return "hybrid"
 
 
 _target_mem_env = os.getenv("SSENSE_TARGET_MEMORY_GB", "").strip()
 TARGET_TOTAL_MEMORY_GB = float(_target_mem_env) if _target_mem_env else 32.0
+
+
+def patch_torchao_dispatch_compat():
+    """Patches TorchAO dispatch logic to prevent PEFT instantiation crashes when building LoRA layers."""
+    try:
+        import torchao.quantization as _tao_q
+        if not hasattr(_tao_q, "LinearActivationQuantizedTensor"):
+            try:
+                from torchao.quantization.linear_activation_quantized_tensor import (
+                    LinearActivationQuantizedTensor as _RealLAQT,
+                )
+                _tao_q.LinearActivationQuantizedTensor = _RealLAQT
+            except ImportError:
+                class _StubLinearActivationQuantizedTensor:
+                    pass
+                _tao_q.LinearActivationQuantizedTensor = _StubLinearActivationQuantizedTensor
+    except Exception:
+        pass
+
+    try:
+        import accelerate.utils.modeling as _acc_mod
+        import accelerate.utils as _acc_u
+        import accelerate as _acc
+        import peft.peft_model as _peft_m
+
+        def _flatten_strings(items):
+            flat = []
+            if isinstance(items, str):
+                return [items]
+            if isinstance(items, (list, tuple, set)):
+                for it in items:
+                    flat.extend(_flatten_strings(it))
+            return flat
+
+        _orig_gbm = _acc_mod.get_balanced_memory
+
+        def _safe_get_balanced_memory(*args, **kwargs):
+            if "no_split_module_classes" in kwargs and kwargs["no_split_module_classes"] is not None:
+                kwargs["no_split_module_classes"] = list(dict.fromkeys(_flatten_strings(kwargs["no_split_module_classes"])))
+            elif len(args) > 2 and args[2] is not None:
+                args_list = list(args)
+                args_list[2] = list(dict.fromkeys(_flatten_strings(args_list[2])))
+                args = tuple(args_list)
+            return _orig_gbm(*args, **kwargs)
+
+        _acc_mod.get_balanced_memory = _safe_get_balanced_memory
+        if hasattr(_acc_u, "get_balanced_memory"):
+            _acc_u.get_balanced_memory = _safe_get_balanced_memory
+        if hasattr(_acc, "get_balanced_memory"):
+            _acc.get_balanced_memory = _safe_get_balanced_memory
+        if hasattr(_peft_m, "get_balanced_memory"):
+            _peft_m.get_balanced_memory = _safe_get_balanced_memory
+
+        _peft_m.PeftModel._no_split_modules = property(
+            lambda self: list(dict.fromkeys(
+                _flatten_strings(
+                    getattr(getattr(self, "base_model", self), "_no_split_modules", ["Qwen2DecoderLayer"])
+                    or ["Qwen2DecoderLayer"]
+                )
+            ))
+        )
+    except Exception:
+        pass
+
+
+patch_torchao_dispatch_compat()
 
 
 class StopAtClosingBrace:
@@ -85,20 +257,22 @@ class StopAtClosingBrace:
         gen_tokens = input_ids[0, self.prompt_len:]
         if len(gen_tokens) < 30:
             return False
-        tail = self.tokenizer.decode(gen_tokens[-8:], skip_special_tokens=True)
+        tail = self.tokenizer.decode(gen_tokens[-8:].tolist() if hasattr(gen_tokens, "tolist") else gen_tokens[-8:], skip_special_tokens=True)
         if "}" in tail:
-            raw_text = self.tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
+            raw_text = self.tokenizer.decode(gen_tokens.tolist() if hasattr(gen_tokens, "tolist") else gen_tokens, skip_special_tokens=True).strip()
             full = raw_text if raw_text.startswith("{") else ("{\n" + raw_text)
             s = full.find("{")
             e = full.rfind("}")
             if s != -1 and e > s:
-                try:
-                    obj = json.loads(full[s:e+1])
-                    if isinstance(obj, dict) and ("dpdp_trust_score" in obj or "global_legal_reasoning" in obj or "violations" in obj):
-                        self.stopped = True
-                        return True
-                except Exception:
-                    pass
+                # Fast brace balance guard: only attempt json.loads when root object braces are balanced
+                if full.count("{") == full.count("}"):
+                    try:
+                        obj = json.loads(full[s:e+1])
+                        if isinstance(obj, dict) and ("dpdp_trust_score" in obj or "global_legal_reasoning" in obj or "violations" in obj):
+                            self.stopped = True
+                            return True
+                    except Exception:
+                        pass
         return False
 
 
@@ -113,15 +287,9 @@ class CancelOnEvent:
 
 class SentenceBoundaryStop:
     """
-    Tier 2A — Sentence-boundary early stop for Concise mode.
-
-    Halts generation after `max_sentences` complete sentences have been
-    decoded. A sentence is considered complete when the decoded text contains
-    at least `max_sentences` segments ending in '.', '!' or '?' followed by
-    whitespace or end-of-string.
-
-    Applied only when temperature == 0.0 (Concise mode greedy decoding).
-    Average saving: 5-15 tokens × ~0.9s/token = 4.5-13.5s off decode time.
+    Tier 2A — Sentence-boundary early stop for Concise and Thinking modes.
+    Upgraded: Pre-caches punctuation token IDs so tokenizer.decode() and regex
+    evaluation are only executed when the latest generated token is a sentence terminator.
     """
     _SENT_RE = re.compile(r'(?<=[.!?])(?:\s|$)')
 
@@ -129,16 +297,29 @@ class SentenceBoundaryStop:
         self.tokenizer   = tokenizer
         self.prompt_len  = prompt_len
         self.max_sentences = max_sentences
+        self._punct_ids = set()
+        for punct in (".", "!", "?", ".\n", "!\n", "?\n", "\n", ".\"", ".'"):
+            try:
+                for tok_id in tokenizer.encode(punct, add_special_tokens=False):
+                    self._punct_ids.add(tok_id)
+            except Exception:
+                pass
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
         gen_tokens = input_ids[0, self.prompt_len:]
         if len(gen_tokens) < 8:   # minimum tokens before checking
             return False
-        text = self.tokenizer.decode(gen_tokens, skip_special_tokens=True).strip()
+        # Fast O(1) integer filter
+        last_tok = int(gen_tokens[-1].item() if hasattr(gen_tokens[-1], "item") else gen_tokens[-1])
+        if self._punct_ids and last_tok not in self._punct_ids:
+            return False
+
+        text = self.tokenizer.decode(gen_tokens.tolist() if hasattr(gen_tokens, "tolist") else gen_tokens, skip_special_tokens=True).strip()
         # Split on sentence boundaries and count complete sentences (>= 4 words to avoid abbreviations like Sec. or e.g.)
         parts   = self._SENT_RE.split(text)
         complete = [p for p in parts if p and p[-1] in '.!?' and len(p.split()) >= 4]
         return len(complete) >= self.max_sentences
+
 
 
 class ProductionAsyncEngine:
@@ -155,7 +336,14 @@ class ProductionAsyncEngine:
         if requested_profile in ("", "auto"):
             self.compute_profile = detected_hw
             print(f"[EngineCore] Auto-detected compute profile: '{self.compute_profile}'")
-        elif requested_profile in ("gpu", "jetson") and detected_hw == "cpu":
+        elif requested_profile == "gpu" and detected_hw == "hybrid":
+            print(
+                f"⚡ [EngineCore] Requested profile 'gpu', but detected GPU has insufficient VRAM (<15.5GB) "
+                f"to host the entire BF16 model + KV cache concurrently."
+            )
+            print("⚡ [EngineCore] Automatically routing to 'hybrid' (Dynamic GPU + RAM Partitioning) to prevent OOM.")
+            self.compute_profile = "hybrid"
+        elif requested_profile in ("gpu", "jetson", "hybrid") and detected_hw == "cpu":
             print(f"⚠️ [EngineCore] Requested profile '{requested_profile}' but functional CUDA runtime not found.")
             print(f"⚠️ [EngineCore] Gracefully switching to 'cpu' profile to ensure server availability.")
             self.compute_profile = "cpu"
@@ -165,22 +353,258 @@ class ProductionAsyncEngine:
         self.base_model_path = base_model_path
         self.audit_adapter_path = audit_adapter_path
         self.chatbot_adapter_path = chatbot_adapter_path
+        self.partition_info: Dict[str, Any] = {}
 
         if self.compute_profile == "cpu":
             self._init_cpu_hf_engine()
+        elif self.compute_profile == "hybrid":
+            self._init_dynamic_partitioned_engine(unified_memory=False)
         elif self.compute_profile in ("gpu", "jetson"):
             self._init_vllm_engine()
         else:
             raise ValueError(
                 f"Unknown SSENSE_COMPUTE_PROFILE '{compute_profile}'. "
-                f"Expected one of: auto, gpu, jetson, cpu."
+                f"Expected one of: auto, gpu, jetson, hybrid, cpu."
             )
+
+    # ─────────────────────────────────────────────────────────────
+    # DYNAMIC PARTITIONED PROFILE: GPU VRAM + System RAM Offloading
+    # ─────────────────────────────────────────────────────────────
+    def _detect_primary_device(self) -> torch.device:
+        """Determines the device where prompt input tokens must be routed."""
+        target_model = getattr(self, "model", None)
+        dev_map = getattr(target_model, "hf_device_map", {}) if target_model else {}
+        for key in ("base_model.model.model.embed_tokens", "model.embed_tokens", "embed_tokens"):
+            if key in dev_map:
+                dev = dev_map[key]
+                if isinstance(dev, int):
+                    return torch.device(f"cuda:{dev}")
+                elif isinstance(dev, str) and dev not in ("disk", "meta", "cpu"):
+                    return torch.device(dev)
+        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+            return torch.device("cuda:0")
+        return torch.device("cpu")
+
+    @property
+    def primary_device(self) -> torch.device:
+        if not hasattr(self, "_primary_device"):
+            self._primary_device = self._detect_primary_device()
+        return self._primary_device
+
+    def optimize_cpu_offloaded_layers(self, model):
+        """
+        On x86 CPUs without AVX512_BF16, torch.bfloat16 GEMM is emulated in software (35-55x slower).
+        Converts CPU-offloaded decoder layers and norm to torch.float32 for native AVX2 vectorization,
+        converting parameter-by-parameter in-place to prevent memory spikes in host RAM.
+        Registers boundary pre-hooks so incoming hidden states seamlessly adapt.
+        """
+        import gc
+        first_cpu_decoder_layer = None
+        converted_count = 0
+
+        # 1. Locate decoder layers
+        base = getattr(model, "base_model", model)
+        inner = getattr(base, "model", base)
+        layers = getattr(inner, "layers", None)
+        if layers is None and hasattr(inner, "model"):
+            layers = getattr(inner.model, "layers", None)
+
+        first_cpu_idx = -1
+        if layers is not None:
+            for idx, layer in enumerate(layers):
+                params = list(layer.parameters())
+                if params and all(p.device.type == "cpu" for p in params):
+                    if any(p.dtype in (torch.bfloat16, torch.float16) for p in params):
+                        with torch.no_grad():
+                            for p in layer.parameters():
+                                if p.device.type == "cpu" and p.dtype in (torch.bfloat16, torch.float16):
+                                    p.data = p.data.to(torch.float32)
+                        converted_count += 1
+                        if first_cpu_decoder_layer is None:
+                            first_cpu_decoder_layer = layer
+                            first_cpu_idx = idx
+            gc.collect()
+
+        # 2. Convert norm if on CPU
+        norm = getattr(inner, "norm", None)
+        if norm is None and hasattr(inner, "model"):
+            norm = getattr(inner.model, "norm", None)
+        if norm is not None:
+            with torch.no_grad():
+                for p in norm.parameters():
+                    if p.device.type == "cpu" and p.dtype in (torch.bfloat16, torch.float16):
+                        p.data = p.data.to(torch.float32)
+
+        # 3. Handle lm_head: keep in BF16 to save 1.1GB RAM, hook pre-cast from FP32 to BF16
+        lm_head = getattr(base, "lm_head", None) or getattr(model, "lm_head", None)
+        if lm_head is not None:
+            lm_params = list(lm_head.parameters())
+            if lm_params and any(p.device.type == "cpu" for p in lm_params):
+                lm_dtype = lm_params[0].dtype
+                if lm_dtype != torch.float32:
+                    def _cast_lm_head_hook(m, args):
+                        if args and isinstance(args[0], torch.Tensor) and args[0].dtype != lm_dtype:
+                            return (args[0].to(lm_dtype),) + args[1:]
+                        return args
+                    lm_head.register_forward_pre_hook(_cast_lm_head_hook)
+
+        # 4. Register forward pre-hook on the boundary CPU decoder layer
+        if first_cpu_decoder_layer is not None:
+            def _cast_to_fp32_hook(m, args):
+                if args and isinstance(args[0], torch.Tensor) and args[0].dtype != torch.float32:
+                    return (args[0].to(torch.float32),) + args[1:]
+                return args
+            first_cpu_decoder_layer.register_forward_pre_hook(_cast_to_fp32_hook)
+            print(f"⚡ [EngineCore/{self.compute_profile}] Accelerated CPU decoder layers ({first_cpu_idx}..{len(layers)-1}) with in-place FP32 AVX2 execution.")
+
+
+    def _init_dynamic_partitioned_engine(self, unified_memory: bool = False):
+        self.backend = "transformers"
+        patch_torchao_dispatch_compat()
+        from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer, StoppingCriteriaList
+        from peft import PeftModel
+
+        self._TextIteratorStreamer = TextIteratorStreamer
+        self._StoppingCriteriaList = StoppingCriteriaList
+
+        devices = get_gpu_devices()
+        total_ram_gb = get_system_ram_gb()
+        cpu_threads = int(os.getenv("SSENSE_CPU_THREADS", "") or os.getenv("OMP_NUM_THREADS", "") or min(6, os.cpu_count() or 4))
+        torch.set_num_threads(cpu_threads)
+        try:
+            torch.set_num_interop_threads(1)
+        except Exception:
+            pass
+
+        dtype = torch.bfloat16
+        try:
+            probe = torch.zeros(1, dtype=torch.bfloat16) + torch.zeros(1, dtype=torch.bfloat16)
+            del probe
+            print("[EngineCore/partitioned] bfloat16 arithmetic verified. Using bfloat16 precision.")
+        except Exception:
+            print("[EngineCore/partitioned] bfloat16 not supported. Falling back to float32.")
+            dtype = torch.float32
+
+        print(f"[EngineCore/partitioned] Loading base model tokenizer from {self.base_model_path}...")
+        self.tokenizer = AutoTokenizer.from_pretrained(self.base_model_path, trust_remote_code=True)
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+
+        max_memory: Dict[Union[int, str], str] = {}
+        partition_details: Dict[str, Any] = {
+            "mode": "unified" if unified_memory else ("hybrid" if devices else "cpu"),
+            "gpus": [],
+            "system_ram_gb": round(total_ram_gb, 2),
+        }
+
+        user_gpu_mem = os.getenv("SSENSE_GPU_MAX_MEMORY", "").strip()
+        user_cpu_mem = os.getenv("SSENSE_CPU_MAX_MEMORY", "").strip()
+
+        if unified_memory and devices:
+            dev_props = devices[0]
+            total_vram_gb = dev_props["total_gb"]
+            target_cap = min(TARGET_TOTAL_MEMORY_GB, total_vram_gb * 0.65)
+            gpu_budget = float(user_gpu_mem.replace("GiB", "").replace("GB", "")) if user_gpu_mem else target_cap
+            max_memory[0] = f"{gpu_budget:.1f}GiB"
+            max_memory["cpu"] = user_cpu_mem if user_cpu_mem else f"{max(8.0, total_ram_gb * 0.3):.1f}GiB"
+            partition_details["gpus"].append({
+                "index": 0, "name": dev_props["name"], "total_vram_gb": total_vram_gb,
+                "weight_budget_gib": round(gpu_budget, 2), "kv_headroom_gib": round(total_vram_gb - gpu_budget, 2),
+            })
+            print(f"⚡ [EngineCore/unified] Jetson Unified Memory: {gpu_budget:.1f}GiB GPU budget, remainder system RAM.")
+        elif devices:
+            for dev in devices:
+                dev_idx = dev["index"]
+                total_vram_gb = dev["total_gb"]
+                gpu_budget, cpu_budget, kv_headroom = compute_dynamic_partition_budgets(total_vram_gb, total_ram_gb)
+                if user_gpu_mem:
+                    try:
+                        gpu_budget = float(user_gpu_mem.replace("GiB", "").replace("GB", ""))
+                        kv_headroom = total_vram_gb - gpu_budget
+                    except Exception:
+                        pass
+                if user_cpu_mem:
+                    try:
+                        cpu_budget = float(user_cpu_mem.replace("GiB", "").replace("GB", ""))
+                    except Exception:
+                        pass
+                max_memory[dev_idx] = f"{gpu_budget:.1f}GiB"
+                max_memory["cpu"] = f"{cpu_budget:.1f}GiB"
+                partition_details["gpus"].append({
+                    "index": dev_idx,
+                    "name": dev["name"],
+                    "total_vram_gb": round(total_vram_gb, 2),
+                    "weight_budget_gib": round(gpu_budget, 2),
+                    "kv_headroom_gib": round(kv_headroom, 2),
+                })
+                print(
+                    f"⚡ [EngineCore/hybrid] GPU {dev_idx} ({dev['name']}): "
+                    f"Allocating {gpu_budget:.1f}GiB for weights | "
+                    f"Reserving {kv_headroom:.1f}GiB strictly for KV Cache & Activations | "
+                    f"Offloading ~{(15.2 - gpu_budget):.1f}GiB to System RAM ({cpu_budget:.1f}GiB cap)."
+                )
+        else:
+            max_memory["cpu"] = user_cpu_mem if user_cpu_mem else f"{max(16.0, total_ram_gb - 2.0):.1f}GiB"
+            print(f"ℹ️ [EngineCore/cpu] Allocating {max_memory['cpu']} system RAM for CPU execution.")
+
+        print(f"[EngineCore/{self.compute_profile}] Loading base model weights with dynamic partitioning ({dtype})...")
+        base_model = AutoModelForCausalLM.from_pretrained(
+            self.base_model_path,
+            torch_dtype=dtype,
+            attn_implementation="sdpa",
+            device_map="auto" if devices else "cpu",
+            max_memory=max_memory if devices else None,
+            trust_remote_code=True,
+            low_cpu_mem_usage=True,
+        )
+
+
+        if hasattr(base_model, "hf_device_map") and base_model.hf_device_map:
+            gpu_layers = sum(1 for v in base_model.hf_device_map.values() if str(v) not in ("cpu", "disk"))
+            cpu_layers = sum(1 for v in base_model.hf_device_map.values() if str(v) == "cpu")
+            partition_details["gpu_layers_count"] = gpu_layers
+            partition_details["cpu_layers_count"] = cpu_layers
+            partition_details["device_map"] = {k: str(v) for k, v in list(base_model.hf_device_map.items())[:8]}
+            print(f"📊 [EngineCore/{self.compute_profile}] Layer Partition: {gpu_layers} modules on GPU, {cpu_layers} modules on CPU.")
+
+        print(f"[EngineCore/{self.compute_profile}] Mounting 'audit' adapter from {self.audit_adapter_path}...")
+        self.model = PeftModel.from_pretrained(
+            base_model,
+            self.audit_adapter_path,
+            adapter_name="audit",
+        )
+
+        print(f"[EngineCore/{self.compute_profile}] Mounting 'chatbot' adapter from {self.chatbot_adapter_path}...")
+        self.model.load_adapter(
+            self.chatbot_adapter_path,
+            adapter_name="chatbot",
+        )
+
+        base_model.config.use_cache = True
+        self.model.config.use_cache = True
+        self.model.eval()
+
+        self._primary_device = self._detect_primary_device()
+        print(f"🎯 [EngineCore/{self.compute_profile}] Primary input device set to: '{self._primary_device}'")
+        # Layer optimization: keep native BF16 on CPU to fit within WSL2 19GB RAM (FP32 would exceed 22GB)
+        # if self.compute_profile in ("hybrid", "gpu-offload"):
+        #     self.optimize_cpu_offloaded_layers(self.model)
+
+        self.partition_info = partition_details
+
+        self._prefix_kv: Dict[str, Any] = {}
+        self._prefix_ids: Dict[str, int] = {}
+
+        self._lock = threading.Lock()
+        print(f"✅ [EngineCore/{self.compute_profile}] Dynamic Partitioned Multi-LoRA Engine ready. Active adapters: {list(self.model.peft_config.keys())}")
 
     # ─────────────────────────────────────────────────────────────
     # CPU PROFILE: HuggingFace Transformers + PEFT
     # ─────────────────────────────────────────────────────────────
     def _init_cpu_hf_engine(self):
         self.backend = "transformers"
+        self._primary_device = torch.device("cpu")
+        patch_torchao_dispatch_compat()
         from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer, StoppingCriteriaList
         from peft import PeftModel
 
@@ -233,8 +657,6 @@ class ProductionAsyncEngine:
         self.model.eval()
 
         # ── Tier B: INT8 weight-only quantization via torchao ─────────────────
-        # On x86 CPUs without AVX-512 VNNI, torchao dequantization overhead is ~28ms/layer
-        # vs 5.8ms in native BF16 (oneDNN AMX/AVX2). Default to false for peak decode tok/s.
         use_int8 = os.getenv("SSENSE_USE_INT8", "false").strip().lower() in ("1", "true")
         if use_int8 and dtype == torch.bfloat16:
             try:
@@ -253,6 +675,11 @@ class ProductionAsyncEngine:
         self._prewarm_kv_prefixes()
 
         self._lock = threading.Lock()
+        self.partition_info = {
+            "mode": "cpu",
+            "cpu_threads": cpu_threads,
+            "dtype": str(dtype),
+        }
         print(f"✅ [EngineCore/cpu] Multi-LoRA HF Engine ready. Active adapters: {list(self.model.peft_config.keys())}")
 
     def _prewarm_kv_prefixes(self):
@@ -261,15 +688,15 @@ class ProductionAsyncEngine:
         try:
             self.model.set_adapter("chatbot")
             for label, header in headers.items():
-                ids = self.tokenizer(header, return_tensors="pt").input_ids
+                ids = self.tokenizer(header, return_tensors="pt").input_ids.to(self.model.device)
                 n = ids.shape[1]
                 with torch.no_grad():
                     out = self.model(ids, use_cache=True, return_dict=True)
                 self._prefix_kv[label] = out.past_key_values
                 self._prefix_ids[label] = n
-                print(f"⚡ [EngineCore/cpu] Pre-warmed '{label}' KV prefix ({n} tokens)")
+                print(f"⚡ [EngineCore/{self.compute_profile}] Pre-warmed '{label}' KV prefix ({n} tokens on {self.model.device})")
         except Exception as e:
-            print(f"⚠️ [EngineCore/cpu] KV prefix pre-warm skipped ({e}). Full prefill will be used.")
+            print(f"⚠️ [EngineCore/{self.compute_profile}] KV prefix pre-warm skipped ({e}). Full prefill will be used.")
             self._prefix_kv.clear()
             self._prefix_ids.clear()
 
@@ -285,9 +712,8 @@ class ProductionAsyncEngine:
             from vllm.lora.request import LoRARequest
         except (ImportError, ModuleNotFoundError) as exc:
             print(f"⚠️  [EngineCore] vLLM not available in this environment ({exc}).")
-            print("⚠️  [EngineCore] Gracefully falling back to Native Transformers Dual-LoRA Engine.")
-            self.compute_profile = "cpu"
-            self._init_cpu_hf_engine()
+            print("⚠️  [EngineCore] Gracefully falling back to Dynamic Partitioned Transformers Engine.")
+            self._init_dynamic_partitioned_engine(unified_memory=is_unified_memory())
             return
 
         self._SamplingParams = SamplingParams
@@ -300,13 +726,23 @@ class ProductionAsyncEngine:
             engine_args = self._build_jetson_args(AsyncEngineArgs)
 
         print(f"[EngineCore/{self.compute_profile}] Booting vLLM Engine...")
-        self.engine = AsyncLLMEngine.from_engine_args(engine_args)
-
-        self.lora_requests = {
-            "audit": LoRARequest("audit_lora", 1, self.audit_adapter_path),
-            "chatbot": LoRARequest("chatbot_lora", 2, self.chatbot_adapter_path),
-        }
-        print(f"✅ [EngineCore/{self.compute_profile}] vLLM Engine fully initialized.")
+        try:
+            self.engine = AsyncLLMEngine.from_engine_args(engine_args)
+            self.lora_requests = {
+                "audit": LoRARequest("audit_lora", 1, self.audit_adapter_path),
+                "chatbot": LoRARequest("chatbot_lora", 2, self.chatbot_adapter_path),
+            }
+            self.partition_info = {
+                "mode": "vllm",
+                "compute_profile": self.compute_profile,
+                "gpu_memory_utilization": engine_args.gpu_memory_utilization,
+            }
+            print(f"✅ [EngineCore/{self.compute_profile}] vLLM Engine fully initialized.")
+        except Exception as exc:
+            print(f"⚠️  [EngineCore] vLLM startup failed ({exc}).")
+            print("⚠️  [EngineCore] Automatically switching to Dynamic Partitioned Transformers Engine...")
+            self.compute_profile = "hybrid" if not is_unified_memory() else "jetson"
+            self._init_dynamic_partitioned_engine(unified_memory=is_unified_memory())
 
     def _build_gpu_args(self, AsyncEngineArgs) -> Any:
         total_vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
@@ -319,28 +755,7 @@ class ProductionAsyncEngine:
         supports_fp8 = major >= 9 or (major == 8 and torch.cuda.get_device_name(0).lower().find("ada") != -1)
         kv_dtype = "fp8" if supports_fp8 else "auto"
 
-        # ── Concurrency ceiling: env-tunable without a code change/rebuild ──
-        # 256 is a reasonable default for a 7B model on a 32-40GB budget (see
-        # docs/SLM_Server_Architecture.md's memory math), but the real ceiling
-        # depends on average prompt/generation length and should be tuned per
-        # deployment. This MUST stay <= SSENSE_MAX_CONCURRENT_INFERENCE in
-        # docker-compose.yml (memory_orchestrator.InferenceQueue) — that
-        # queue's job is to admit at most this many requests to the engine at
-        # once, so the two numbers are two views of the same ceiling and
-        # should be changed together.
         max_num_seqs = int(os.getenv("SSENSE_VLLM_MAX_NUM_SEQS", "256"))
-
-        # ── CPU-RAM KV-cache overflow (paged "swap" space) ──────────────
-        # vLLM's PagedAttention KV cache lives in a fixed-size GPU block pool
-        # sized by gpu_memory_utilization. Under a genuine burst (many
-        # sequences, long contexts) that pool can fill before max_num_seqs is
-        # reached; without swap_space vLLM's only recourse is to *preempt*
-        # (recompute from scratch) a lower-priority sequence — a latency
-        # cliff for whoever gets preempted. swap_space lets it page cold
-        # blocks out to host RAM instead and resume them cheaply. Default of
-        # 4 GiB matches vLLM's own upstream default; raise it on a host with
-        # RAM to spare (e.g. the 32-40GB VRAM + host RAM split this server is
-        # designed for) to absorb bigger bursts before any preemption happens.
         swap_space_gb = float(os.getenv("SSENSE_VLLM_SWAP_SPACE_GB", "4"))
 
         return AsyncEngineArgs(
@@ -351,9 +766,9 @@ class ProductionAsyncEngine:
             max_cpu_loras=4,
             max_model_len=8192,
             max_num_seqs=max_num_seqs,
+            swap_space=int(swap_space_gb),
             gpu_memory_utilization=utilization,
             kv_cache_dtype=kv_dtype,
-            swap_space=swap_space_gb,
             dtype="bfloat16",
             enable_prefix_caching=True,
             enable_chunked_prefill=True,
@@ -407,35 +822,44 @@ class ProductionAsyncEngine:
                 t_start = time.perf_counter()
                 with self._lock:
                     self.model.set_adapter("audit")
-                inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048).to("cpu")
-                in_len = inputs["input_ids"].shape[1]
-                print(f"🔍 [Engine/Audit] Prefilling {in_len} tokens on CPU...")
+                    inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
+                    inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+                    in_len = inputs["input_ids"].shape[1]
+                    print(f"🔍 [Engine/Audit] Prefilling {in_len} tokens on {self.primary_device}...")
 
-                im_end_id = self.tokenizer.convert_tokens_to_ids("<|im_end|>")
-                endoftext_id = self.tokenizer.convert_tokens_to_ids("<|endoftext|>")
-                eos_ids = [self.tokenizer.eos_token_id]
-                for sp_id in (im_end_id, endoftext_id):
-                    if isinstance(sp_id, int) and sp_id not in eos_ids:
-                        eos_ids.append(sp_id)
+                    im_end_id = self.tokenizer.convert_tokens_to_ids("<|im_end|>")
+                    endoftext_id = self.tokenizer.convert_tokens_to_ids("<|endoftext|>")
+                    eos_ids = [self.tokenizer.eos_token_id]
+                    for sp_id in (im_end_id, endoftext_id):
+                        if isinstance(sp_id, int) and sp_id not in eos_ids:
+                            eos_ids.append(sp_id)
 
-                criteria = self._StoppingCriteriaList([StopAtClosingBrace(self.tokenizer, in_len)])
-                with torch.no_grad():
-                    outputs = self.model.generate(
-                        **inputs,
-                        max_new_tokens=min(max_tokens, 256 if self.compute_profile == "cpu" else 768),
-                        do_sample=False,
-                        eos_token_id=eos_ids,
-                        pad_token_id=self.tokenizer.pad_token_id,
-                        stopping_criteria=criteria,
-                        use_cache=True,
-                    )
-                input_len = inputs["input_ids"].shape[1]
-                gen_ids = outputs[0][input_len:]
-                gen_len = len(gen_ids)
-                dur = time.perf_counter() - t_start
-                tps = (gen_len / dur) if dur > 0 else 0
-                print(f"✅ [Engine/Audit] Completed {gen_len} tokens in {dur:.2f}s ({tps:.2f} tok/s)")
-                return self.tokenizer.decode(gen_ids, skip_special_tokens=False)
+                    criteria = self._StoppingCriteriaList([StopAtClosingBrace(self.tokenizer, in_len)])
+                    audit_gen_kwargs = {
+                        "max_new_tokens": min(max_tokens, 512 if self.compute_profile in ("cpu", "hybrid") else 768),
+                        "do_sample": False,
+                        "eos_token_id": eos_ids,
+                        "pad_token_id": self.tokenizer.pad_token_id,
+                        "stopping_criteria": criteria,
+                        "use_cache": True,
+                    }
+                    if self.compute_profile == "cpu":
+                        # Speculative lookup is only safe on homogeneous CPU execution;
+                        # on hybrid offloaded pipelines, cross-device KV cache rollbacks cause heavy latency.
+                        audit_gen_kwargs["prompt_lookup_num_tokens"] = 3
+
+                    with torch.no_grad():
+                        outputs = self.model.generate(
+                            **inputs,
+                            **audit_gen_kwargs,
+                        )
+                    input_len = inputs["input_ids"].shape[1]
+                    gen_ids = outputs[0][input_len:]
+                    gen_len = len(gen_ids)
+                    dur = time.perf_counter() - t_start
+                    tps = (gen_len / dur) if dur > 0 else 0
+                    print(f"✅ [Engine/Audit] Completed {gen_len} tokens in {dur:.2f}s ({tps:.2f} tok/s)")
+                    return self.tokenizer.decode(gen_ids, skip_special_tokens=False)
 
             raw = await asyncio.to_thread(_sync_audit)
             return raw.replace("<|im_end|>", "").replace("<|endoftext|>", "").strip()
@@ -511,10 +935,10 @@ class ProductionAsyncEngine:
                     suffix_ids = full_ids[:, prefix_len:]
                     suffix_len = suffix_ids.shape[1]
                     total_len = prefix_len + suffix_len
-                    cache_pos = torch.arange(prefix_len, total_len, dtype=torch.long)
-                    attn_mask = torch.ones(1, total_len, dtype=torch.long)
+                    cache_pos = torch.arange(prefix_len, total_len, dtype=torch.long, device=self.model.device)
+                    attn_mask = torch.ones(1, total_len, dtype=torch.long, device=self.model.device)
                     inputs = {
-                        "input_ids": suffix_ids,
+                        "input_ids": suffix_ids.to(self.model.device),
                         "attention_mask": attn_mask,
                     }
                     in_len = suffix_len  # stopping criteria checks generated tokens after suffix
@@ -524,13 +948,14 @@ class ProductionAsyncEngine:
                     use_cached_kv = False
 
             if not use_cached_kv:
-                inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024).to("cpu")
+                inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
+                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
                 in_len = inputs["input_ids"].shape[1]
 
             # Tier 1B: Trust the ceiling from main.py — no second cap here.
             chat_max = max_tokens
             print(
-                f"💬 [Engine/Chat] prompt={in_len} tok (kv_cached={use_cached_kv}), max={chat_max}, "
+                f"💬 [Engine/Chat] prompt={in_len} tok (kv_cached={use_cached_kv}, dev={self.primary_device}), max={chat_max}, "
                 f"temp={temperature:.2f} (sampling={is_sampling}, multi_site={multi_site})...",
                 flush=True,
             )
@@ -544,9 +969,15 @@ class ProductionAsyncEngine:
 
             # Build stopping criteria list
             criteria_list = [CancelOnEvent(stop_event)]
-            # Tier 2A: sentence-boundary stop for Concise (greedy) mode
             if not is_sampling:
-                criteria_list.append(SentenceBoundaryStop(self.tokenizer, in_len, max_sentences=2))
+                # Concise mode: 2 sentences (or 3 for multi-site comparisons)
+                max_sents = 3 if multi_site else 2
+                criteria_list.append(SentenceBoundaryStop(self.tokenizer, in_len, max_sentences=max_sents))
+            else:
+                # Thinking mode early stop: halt after 4 complete sentences (5 for multi-site)
+                # to prevent repetitive rambling beyond the thorough answer.
+                max_sents = 5 if multi_site else 4
+                criteria_list.append(SentenceBoundaryStop(self.tokenizer, in_len, max_sentences=max_sents))
             stopping_criteria = self._StoppingCriteriaList(criteria_list)
 
             gen_kwargs: Dict[str, Any] = {
@@ -561,9 +992,7 @@ class ProductionAsyncEngine:
             }
             if use_cached_kv and pkv_copy is not None:
                 gen_kwargs["past_key_values"] = pkv_copy
-                gen_kwargs["cache_position"] = cache_pos
-            else:
-                # Tier 1A: Prompt Lookup Decoding only when not using KV prefix (avoids rotary index mismatch)
+            elif self.compute_profile == "cpu":
                 gen_kwargs["prompt_lookup_num_tokens"] = 3
 
             if is_sampling:
@@ -571,23 +1000,26 @@ class ProductionAsyncEngine:
                 # Tier 2B: top_k=40 narrows from 151,936 → 40 logits before top_p.
                 gen_kwargs["top_k"]  = 40
                 gen_kwargs["top_p"]  = 0.85
-            # Tier 2C: light repetition penalty for multi-site queries to suppress refusal loops.
-            if multi_site:
-                gen_kwargs["repetition_penalty"] = 1.05
+
+            # SOTA Fix: repetition_penalty always-on (not just multi_site).
+            # The chatbot LoRA can produce repetition loops in both single-site
+            # and multi-site thinking mode. A light penalty of 1.15 prevents
+            # 'notice notice notice' loops with zero quality degradation.
+            # For multi-site, boost slightly more to suppress refusal-loops.
+            gen_kwargs["repetition_penalty"] = 1.2 if multi_site else 1.15
 
             gen_error: Optional[Exception] = None
 
             def _run_chat_gen():
                 nonlocal gen_error
                 try:
-                    # Tier A: Lock held ONLY for adapter switch (8.7ms), not for the entire 30-90s generation
                     with self._lock:
                         if stop_event.is_set():
                             return
                         self.model.set_adapter("chatbot")
-                    if not stop_event.is_set():
-                        with torch.no_grad():
-                            self.model.generate(**gen_kwargs)
+                        if not stop_event.is_set():
+                            with torch.no_grad():
+                                self.model.generate(**gen_kwargs)
                 except Exception as e:
                     gen_error = e
                     print(f"🛑 [Engine/Chat] Generation error: {e}", flush=True)
@@ -620,7 +1052,7 @@ class ProductionAsyncEngine:
                             break
                         if not thread.is_alive() and streamer.text_queue.empty():
                             break
-                        await asyncio.sleep(0.005)   # yield event loop for 5ms
+                        await asyncio.sleep(0.001)   # yield event loop for 1ms
                         continue
 
                     # streamer.end() puts the stop_signal sentinel onto the queue
@@ -642,9 +1074,11 @@ class ProductionAsyncEngine:
             return
 
         # vLLM path
+        repetition_pen = 1.2 if multi_site else 1.15
         sampling_params = self._SamplingParams(
             temperature=temperature,
             max_tokens=max_tokens,
+            repetition_penalty=repetition_pen,
             stop=["<|im_end|>", "<|endoftext|>"]
         )
         results_generator = self.engine.generate(

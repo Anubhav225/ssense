@@ -114,13 +114,15 @@ _CONTENT_SELECTORS = [
     '.uc-embed', '#CookiebotDeclaration',
 ]
 
-# Non-Latin Unicode ranges (Devanagari → CJK; matches extractor-core.ts)
+# Non-target Unicode ranges (CJK, Cyrillic, Thai, Hebrew, etc.)
+# Explicitly EXCLUDES Indian Eighth Schedule languages (\u0900-\u0D7F: Devanagari, Bengali,
+# Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam, etc.) per DPDP Act Sec 5(3).
 _NON_LATIN_RE = re.compile(
-    r"[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF"
-    r"\u0B00-\u0B7F\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF"
-    r"\u0D00-\u0D7F\u0D80-\u0DFF\u0600-\u06FF\u0750-\u077F"
-    r"\u0E00-\u0E7F\u0590-\u05FF\u4E00-\u9FFF\u3040-\u30FF"
-    r"\u31F0-\u31FF\uAC00-\uD7AF]"
+    r"[\u0400-\u04FF"             # Cyrillic
+    r"\u0600-\u06FF\u0750-\u077F" # Arabic
+    r"\u0E00-\u0E7F\u0590-\u05FF" # Thai, Hebrew
+    r"\u4E00-\u9FFF\u3040-\u30FF" # CJK unified ideographs, Hiragana, Katakana
+    r"\u31F0-\u31FF\uAC00-\uD7AF]" # Katakana phonetic, Hangul Syllables
 )
 _NON_LATIN_LINE_THRESHOLD = 0.30   # drop line if ≥30% non-Latin chars
 

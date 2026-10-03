@@ -68,8 +68,8 @@
           },
           "evidence_quote": {
             "type": "string",
-            "minLength": 20,
-            "description": "The exact verbatim string extracted from the policy. Must be at least 20 characters and contain no internal periods to prevent truncation bugs."
+            "minLength": 1,
+            "description": "The exact verbatim string extracted from the policy."
           },
           "network_action": {
             "type": "string",

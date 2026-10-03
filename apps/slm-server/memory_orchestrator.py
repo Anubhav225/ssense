@@ -324,8 +324,9 @@ class MemoryOrchestrator:
         self.inference_queue = InferenceQueue(
             max_concurrent=int(os.getenv("SSENSE_MAX_CONCURRENT_INFERENCE", "32")),
             max_waiting=int(os.getenv("SSENSE_MAX_QUEUE_DEPTH", "5000")),
-            max_queue_wait_seconds=float(os.getenv("SSENSE_MAX_QUEUE_WAIT_SECONDS", "20")),
+            max_queue_wait_seconds=float(os.getenv("SSENSE_MAX_QUEUE_WAIT_SECONDS", "180")),
         )
+
 
     @classmethod
     def _normalise(cls, domain: str) -> str:

@@ -71,7 +71,8 @@ x-slm-common: &slm-common
     retries: 4
     # Models are persisted on host mount; 180s start period allows 15GB weights to map
     # into RAM/VRAM without keeping developers waiting for hours if a startup error occurs.
-    start_period: 180s
+    # Note: Hybrid dynamic partitioning takes longer; bumped from 180s to 1800s to support slow disks.
+    start_period: 1800s
 
 x-nginx-common: &nginx-common
   image: nginx:1.27-alpine
@@ -128,7 +129,7 @@ services:
     # SOTA FIX: Shared memory is absolutely critical for vLLM/PyTorch tensor
     # operations. Default Docker shm_size (64MB) causes vLLM to instantly
     # "Bus error (core dumped)".
-    shm_size: '8gb'
+    shm_size: '4gb'
     depends_on:
       redis:
         condition: service_healthy

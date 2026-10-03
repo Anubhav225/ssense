@@ -50,6 +50,7 @@ from slowapi.errors import RateLimitExceeded
 
 import db_sync
 from audit_store import audit_store
+from audit_corrector import apply_statutory_compliance_layer
 from engine import ProductionAsyncEngine, detect_hardware_capabilities, _SYS_CONCISE, _SYS_THINKING
 from memory_orchestrator import memory_orchestrator, QueueSaturatedError
 from multi_user_session import multi_user_session_manager
@@ -80,8 +81,8 @@ if COMPUTE_PROFILE_ENV in ("", "auto"):
 else:
     COMPUTE_PROFILE = COMPUTE_PROFILE_ENV
 
-CHAT_MAX_TOKENS_CONCISE  = 60
-CHAT_MAX_TOKENS_THINKING = 200
+CHAT_MAX_TOKENS_CONCISE  = 50 if COMPUTE_PROFILE in ("cpu", "hybrid", "gpu-offload") else 60
+CHAT_MAX_TOKENS_THINKING = 120 if COMPUTE_PROFILE in ("cpu", "hybrid", "gpu-offload") else 200
 
 
 
@@ -153,7 +154,7 @@ def ensure_models_exist():
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global llm_engine
+    global llm_engine, COMPUTE_PROFILE
     print("🚀 Booting Ssense SLM Server v6 (server-side extraction)...")
 
     # Auto-import BEFORE audit_store opens the local DB file: if this is a
@@ -179,6 +180,8 @@ async def lifespan(app: FastAPI):
         chatbot_adapter_path=str(chat_dir),
         compute_profile=COMPUTE_PROFILE,
     )
+    # Synchronize COMPUTE_PROFILE with the engine's resolved profile (in case auto-adapted to hybrid)
+    COMPUTE_PROFILE = getattr(llm_engine, "compute_profile", COMPUTE_PROFILE)
 
     # Background periodic export → SSENSE_DB_EXPORT_PATH (no-op if unset).
     sync_task = asyncio.create_task(db_sync.periodic_export_task([audit_store._db_path, user_store.db_path, sync_store.db_path]))
@@ -480,6 +483,8 @@ def _audit_max_chunks_for_profile() -> int:
     """
     if COMPUTE_PROFILE == "cpu":
         return int(os.getenv("SSENSE_AUDIT_MAX_CHUNKS_CPU", "1"))
+    elif COMPUTE_PROFILE in ("hybrid", "gpu-offload"):
+        return int(os.getenv("SSENSE_AUDIT_MAX_CHUNKS_HYBRID", "2"))
     return int(os.getenv("SSENSE_AUDIT_MAX_CHUNKS_GPU", "20"))
 
 
@@ -608,28 +613,61 @@ def recombine_audit_reports(chunk_reports: list[Dict[str, Any]], domain: str) ->
     return final_report
 
 
+# DPDP Act 2023 violation taxonomy injected into the prompt to anchor the model's
+# attention on specific statutory categories. This is a SOTA "taxonomy-anchored CoT"
+# technique that eliminates the need for retraining by making the output schema
+# explicit in the prompt itself. The model was fine-tuned on this schema, so
+# naming the exact violation types activates the correct attention heads.
+_DPDP_VIOLATION_TAXONOMY = """
+VIOLATION TYPES YOU MUST CHECK FOR (evaluate EACH one against the policy text):
+1. NOTICE_INADEQUATE (Section 5 + Rule 3): Policy lacks itemized notice or uses implied/blanket consent.
+2. CONSENT_NOT_FREE_OR_SPECIFIC (Section 6): Biometric/sensitive data collected without explicit opt-in, or forced consent via browsing.
+3. DATA_RETENTION_LIMIT_EXCEEDED (Section 8(7)): Data retained indefinitely, or user denied right to erasure/correction.
+4. CHILD_CONSENT_VIOLATION (Section 9): Children/minors tracked, targeted, or profiled without verifiable parental consent.
+5. CROSS_BORDER_TRANSFER_VIOLATION (Section 16): Data transferred to foreign/overseas/non-notified jurisdictions.
+6. GRIEVANCE_REDRESSAL_INADEQUATE (Section 13): No Grievance Officer in India, or complaints explicitly refused/disregarded.
+7. SECURITY_SAFEGUARDS_MISSING (Section 8(5)): No mention of security measures or breach notification.
+8. PURPOSE_LIMITATION_VIOLATION (Section 4): Data processed for vague/unspecified/commercial purposes beyond stated use.
+
+FOR EACH VIOLATION FOUND:
+- Set omission_check: false (only flag ACTIVE CLAIMS in the text, not missing items)
+- Provide a verbatim evidence_quote from the policy text (minimum 20 characters)
+- Set the correct statute_reference (e.g. "Section 9(1)")
+- Choose the appropriate network_action: BLOCK_THIRD_PARTY, WARN_USER_ONLY, STRIP_TELEMETRY_HEADER
+"""
+
+
 def _build_audit_prompt(domain: str, clean_text: str) -> str:
-    # BUG FIX: this used to blindly re-slice to [:3200] regardless of what
-    # was passed in. `clean_text` here is always ONE chunk already produced
-    # by chunk_policy_text() — sentence-safe and bounded to ~max_chunk_chars
-    # plus a small overlap allowance (see that function's docstring) — so
-    # re-slicing at a flat 3200 was at best redundant and at worst actively
-    # harmful: it silently cut off the overlap context chunk_policy_text had
-    # just carefully added, and did so with a blind character slice, which
-    # could land mid-sentence even though the chunker itself never would.
-    # What remains is a generous backstop (well above max_chunk_chars +
-    # overlap) that should essentially never trigger in normal operation —
-    # a true last-resort safety net, not a routine truncation step.
-    max_chars = 1800 if COMPUTE_PROFILE == "cpu" else 4500
+    """SOTA Taxonomy-Anchored Chain-of-Thought audit prompt.
+
+    Upgrade from generic instruction to explicit violation taxonomy enumeration.
+    This activates the model's fine-tuned attention heads for each violation
+    category without retraining. The model sees EXACTLY the schema field names
+    it was trained to output.
+    """
+    if COMPUTE_PROFILE == "cpu":
+        max_chars = 1800
+    elif COMPUTE_PROFILE in ("hybrid", "gpu-offload"):
+        max_chars = 3200
+    else:
+        max_chars = 4500
     policy_slice = clean_text[:max_chars].strip()
+
     sys_msg = (
         "You are an expert DPDP Act 2023 forensic legal auditor. "
-        "Analyze the provided corporate privacy policy for statutory violations under the "
+        "Analyze the provided corporate privacy policy SECTION for statutory violations under the "
         "Digital Personal Data Protection Act 2023 and DPDP Rules 2025. "
-        "If violations are found, generate an 'explainability' object with XAI feature attributions (e.g. SHAP values) indicating the specific keywords or concepts driving the decision. "
-        "Output ONLY a valid JSON object strictly matching the schema contract."
+        "Follow these rules STRICTLY:\n"
+        "1. Only flag ACTIVE, AFFIRMATIVE claims in the policy text (omission_check must be false).\n"
+        "2. A verbatim evidence_quote (>20 chars) MUST be present for every violation.\n"
+        "3. The dpdp_trust_score must reflect ALL violations found: start at 100, deduct 10-15 per violation.\n"
+        "4. Output ONLY a valid JSON object matching the schema. No markdown, no extra text."
     )
-    user_msg = f"[POLICY TO AUDIT: {domain}]\n{policy_slice}"
+    user_msg = (
+        f"[POLICY TO AUDIT: {domain}]\n\n"
+        f"{_DPDP_VIOLATION_TAXONOMY}\n"
+        f"[POLICY TEXT SECTION]:\n{policy_slice}"
+    )
     return (
         f"<|im_start|>system\n{sys_msg}<|im_end|>\n"
         f"<|im_start|>user\n{user_msg}<|im_end|>\n"
@@ -645,11 +683,13 @@ def translate_audit_for_prompt(report: Dict[str, Any]) -> str:
     if not violations:
         return f"Score: {score}/100 (Compliant, no critical violations found)."
 
+    max_v = 6 if COMPUTE_PROFILE in ("cpu", "hybrid", "gpu-offload") else 10
+    ev_len = 50 if COMPUTE_PROFILE in ("cpu", "hybrid", "gpu-offload") else 80
     parts = [f"Score: {score}/100 | {len(violations)} Violation(s):"]
-    for i, v in enumerate(violations[:3], 1):
+    for i, v in enumerate(violations[:max_v], 1):
         vtype = v.get("violation_type", "Unknown").replace("_", " ").title()
         ref   = v.get("statute_reference", "DPDP")
-        ev    = v.get("evidence_quote", "").strip()[:65]
+        ev    = v.get("evidence_quote", "").strip()[:ev_len]
         if ev:
             parts.append(f'{i}. {ref} {vtype}: "{ev}"')
         else:
@@ -694,13 +734,18 @@ _audit_chunk_semaphore: Optional[asyncio.Semaphore] = None
 def _get_audit_chunk_semaphore() -> asyncio.Semaphore:
     global _audit_chunk_semaphore
     if _audit_chunk_semaphore is None:
-        default_limit = "1" if COMPUTE_PROFILE == "cpu" else "32"
+        if COMPUTE_PROFILE == "cpu":
+            default_limit = "1"
+        elif COMPUTE_PROFILE in ("hybrid", "gpu-offload"):
+            default_limit = "1"
+        else:
+            default_limit = "32"
         limit = int(os.getenv("SSENSE_AUDIT_MAX_CONCURRENT_CHUNKS", default_limit))
         _audit_chunk_semaphore = asyncio.Semaphore(limit)
     return _audit_chunk_semaphore
 
 
-async def _run_inference(domain: str, clean_text: str) -> Dict[str, Any]:
+async def _run_inference(domain: str, clean_text: str, raw_policy_for_scl: str = "") -> Dict[str, Any]:
     """Run the audit model across policy chunks and combine into one report.
 
     Design (matches how the audit LoRA was actually fine-tuned — one policy
@@ -741,8 +786,15 @@ async def _run_inference(domain: str, clean_text: str) -> Dict[str, Any]:
     to produce, which also means one less LLM call (and one less unit of
     GPU contention against chat) per multi-chunk audit.
     """
-    chunk_size = 1800 if COMPUTE_PROFILE == "cpu" else 3200
-    overlap = 1 if COMPUTE_PROFILE == "cpu" else 2
+    if COMPUTE_PROFILE == "cpu":
+        chunk_size = 1800
+        overlap = 1
+    elif COMPUTE_PROFILE in ("hybrid", "gpu-offload"):
+        chunk_size = 2800
+        overlap = 2
+    else:
+        chunk_size = 3200
+        overlap = 2
     chunks = chunk_policy_text(clean_text, max_chunk_chars=chunk_size, overlap_sentences=overlap)
     max_eval_chunks = _audit_max_chunks_for_profile()
 
@@ -768,6 +820,8 @@ async def _run_inference(domain: str, clean_text: str) -> Dict[str, Any]:
         prompt = _build_audit_prompt(domain, chunk_text)
         req_id = str(uuid.uuid4())
         async with semaphore:
+            # Yield event loop briefly so any concurrent chat request waiting for engine can be scheduled
+            await asyncio.sleep(0.02)
             raw = await llm_engine.generate_audit(
                 request_id=req_id, prompt=prompt, schema=get_dpdp_schema(), max_tokens=1024
             )
@@ -789,12 +843,15 @@ async def _run_inference(domain: str, clean_text: str) -> Dict[str, Any]:
               f"(continuing with {len(chunk_reports)} successful result(s)): {chunk_errors[:2]}")
 
     if not chunk_reports:
-        return {
-            "global_legal_reasoning": f"Audit of {domain} could not process policy sections.",
+        # Even if the model produced no usable JSON, run SCL on the raw text
+        # before giving up — explicit violations in policy text are still catchable.
+        bare_report = {
+            "global_legal_reasoning": f"Audit of {domain} could not process policy sections via model inference.",
             "violations": [],
             "dpdp_trust_score": 50,
             "subtlety_score": 0,
         }
+        return apply_statutory_compliance_layer(bare_report, raw_policy_for_scl or clean_text, domain)
 
     # Keep only chunks that found something — "good portions are removed".
     # A chunk counts as flagged if its score is below a clean 100 OR it
@@ -812,7 +869,7 @@ async def _run_inference(domain: str, clean_text: str) -> Dict[str, Any]:
           f"{'congregating their violations' if flagged_reports else 'policy is clean across all evaluated sections'}.")
 
     if not flagged_reports:
-        return {
+        bare_clean = {
             "global_legal_reasoning": (
                 f"Comprehensive multi-section forensic audit of {domain} under the DPDP Act 2023 "
                 "and DPDP Rules 2025 revealed no active statutory contradictions in any of the "
@@ -822,11 +879,20 @@ async def _run_inference(domain: str, clean_text: str) -> Dict[str, Any]:
             "dpdp_trust_score": 100,
             "subtlety_score": 0,
         }
+        # Still run SCL — model may have missed explicit violations on the full text
+        return apply_statutory_compliance_layer(bare_clean, raw_policy_for_scl or clean_text, domain)
 
     # Deterministic congregation of violations from ONLY the flagged
     # sections — pure Python, no further model call. See
     # recombine_audit_reports() for the dedup + severity-scoring logic.
-    return recombine_audit_reports(flagged_reports, domain)
+    model_report = recombine_audit_reports(flagged_reports, domain)
+
+    # ── Statutory Compliance Layer (SCL) ────────────────────────────────────
+    # Apply deterministic regex-based post-processing to catch violations that
+    # the LoRA model missed due to attention limits on long/complex policy text.
+    # The SCL is lossless: it only ADDS missed violations with direct evidence;
+    # it never removes model-found violations. See audit_corrector.py.
+    return apply_statutory_compliance_layer(model_report, raw_policy_for_scl or clean_text, domain)
 
 
 @asynccontextmanager
@@ -857,10 +923,10 @@ async def _admitted():
 async def health():
     cache_stats = await audit_store.stats()
     q = memory_orchestrator.inference_queue
-    return {
+    payload = {
         "status":               "online",
         "backend":              getattr(llm_engine, "backend", "vllm"),
-        "compute_profile":      COMPUTE_PROFILE,
+        "compute_profile":      getattr(llm_engine, "compute_profile", COMPUTE_PROFILE),
         "engine_ready":         llm_engine is not None,
         "active_jobs":          q.in_flight,
         "queue_waiting":        q.waiting,
@@ -870,6 +936,9 @@ async def health():
         "audit_cache":          cache_stats,
         "timestamp":            int(time.time()),
     }
+    if hasattr(llm_engine, "partition_info") and llm_engine.partition_info:
+        payload["partition_info"] = llm_engine.partition_info
+    return payload
 
 
 _status_memo: Optional[Dict[str, Any]] = None
@@ -1269,7 +1338,7 @@ async def audit_by_url(request: Request, body: AuditByUrlRequest):
             raise HTTPException(503, "SLM engine is still initializing. Please wait a few moments.")
         async with _admitted():
             clean_text = sanitize_input_prompt(fetch.text, is_audit_policy=True)
-            report     = await _run_inference(body.domain, clean_text)
+            report     = await _run_inference(body.domain, clean_text, raw_policy_for_scl=clean_text)
 
             # !! Policy text is discarded here — never written to DB or returned !!
             del clean_text
@@ -1316,7 +1385,8 @@ async def audit_by_text(request: Request, body: AuditByTextRequest):
     if llm_engine is None:
         raise HTTPException(503, "SLM engine is still initializing. Please wait a few moments.")
     async with _admitted():
-        report   = await _run_inference(body.domain, clean_text)
+        # Pass raw policy text to SCL for full-document regex scanning
+        report   = await _run_inference(body.domain, clean_text, raw_policy_for_scl=clean_text)
         del clean_text
         chat_ctx = translate_audit_for_prompt(report)
         await memory_orchestrator.save_audit(body.domain, policy_hash, report, chat_ctx)
@@ -1413,9 +1483,40 @@ async def chat(request: Request, body: ChatRequest):
     audited_contexts, unaudited_domains = await memory_orchestrator.resolve_mentioned_domains(
         clean_prompt, current_domain=body.domain
     )
+
+    # ── SOTA Upgrade: RAG Fallback for General DPDP Queries ─────────────────
+    # When no audit context exists for the requested domain, probe the RAG
+    # engine before returning a hard refusal. If the query matches DPDP Act
+    # content (threshold-passing hit), allow a "general law mode" response
+    # grounded purely in the authentic statutory index. This is in-distribution
+    # for the chatbot LoRA, which was trained on [STATUTORY CONTEXT] blocks.
+    _rag_general_mode = False
+    _general_context_str = ""
     if not audited_contexts:
+        # Only attempt RAG fallback if domain is empty/blank (true general query)
+        # or if the user is explicitly asking about the DPDP Act/law in general
+        _is_general_query = (
+            not body.domain
+            or body.domain in ("", "newtab", "blank", "localhost")
+            or bool(re.search(
+                r"\b(dpdp|data protection(?: act| law| officer)?|data principal|data fiduciary|"
+                r"section \d+|rule \d+|consent|grievance officer|personal data|dpo|sdf|significant data)",
+                clean_prompt, re.I
+            ))
+        )
+        if _is_general_query:
+            _rag_k = 1 if COMPUTE_PROFILE in ("cpu", "hybrid", "gpu-offload") else 3
+            _gen_ctx, _gen_hits = await rag_engine.retrieve_context(
+                clean_prompt, top_k=_rag_k, rerank_depth=10
+            )
+            if _gen_ctx and _gen_hits:
+                _rag_general_mode = True
+                _general_context_str = _gen_ctx
+                print(f"📖 [Chat/General] RAG fallback activated for general DPDP query: \"{clean_prompt[:60]}\"")
+
+    if not audited_contexts and not _rag_general_mode:
         async def _gate():
-            yield f"data: {json.dumps({'event':'token','data':'Please run an Audit on this site (or mention an audited site) before chatting.'})}\n\n"
+            yield f"data: {json.dumps({'event':'token','data':'Please run an Audit on a specific website before chatting about it. For general DPDP Act questions, try asking about a specific section or provision.'})}\n\n"
             yield f"data: {json.dumps({'event':'done'})}\n\n"
         return StreamingResponse(_gate(), media_type="text/event-stream", headers=sse_headers)
 
@@ -1430,22 +1531,42 @@ async def chat(request: Request, body: ChatRequest):
     if multi_site and mode == "concise":
         max_tokens = 70
 
-    # ── Request coalescing ─────────────────────────────────────────────────
-    task_key = memory_orchestrator.compute_sha256(
-        f"chat::{mode}::{body.domain}::{clean_prompt}", "chat"
-    )
+    session_domain = body.domain if (body.domain and body.domain not in ("newtab", "blank", "localhost")) else (list(audited_contexts.keys())[0] if audited_contexts else "dpdp-general")
+    history_turns = await multi_user_session_manager.get_history(user_id, session_domain)
+    if history_turns and COMPUTE_PROFILE in ("cpu", "hybrid", "gpu-offload"):
+        history_turns = history_turns[-1:]
+        if history_turns[0][0].strip().lower() == clean_prompt.strip().lower():
+            history_turns = []
+
+    # ── Multi-user request coalescing ──────────────────────────────────────
+    # If no prior user-specific conversational turns exist, identical queries on the same
+    # domain coalesce into one broadcast stream so concurrent users share GPU inference!
+    if history_turns:
+        coalesce_key = f"chat::{mode}::{user_id}::{session_domain}::{clean_prompt}"
+    else:
+        coalesce_key = f"chat::{mode}::{session_domain}::{clean_prompt}"
+
+    task_key = memory_orchestrator.compute_sha256(coalesce_key, "chat")
     is_leader, broadcaster = await memory_orchestrator.acquire_execution_lease(task_key)
 
     if not is_leader:
         async def _coalesced():
             q = broadcaster.subscribe()
+            follower_tokens = []
             while True:
                 item = await q.get()
                 if item is None:
                     break
                 event, data = item
+                if event == "token":
+                    follower_tokens.append(data)
                 yield f"data: {json.dumps({'event': event, 'data': data})}\n\n"
+            if follower_tokens:
+                await multi_user_session_manager.record_turn(
+                    user_id, session_domain, clean_prompt, "".join(follower_tokens)
+                )
         return StreamingResponse(_coalesced(), media_type="text/event-stream", headers=sse_headers)
+
 
     # ── Leader: admit into the bounded inference queue, then RAG + generate ─
     length_instr = (
@@ -1467,87 +1588,140 @@ async def chat(request: Request, body: ChatRequest):
                 return
 
             try:
-                # Tier 1E: Skip RAG for Concise mode.
-                # The compact chat_context already contains the statutory violation
-                # reference (e.g. "Section 5(1) Notice Inadequate"). RAG only adds
-                # 50-120 tokens of full statutory text needed for deep reasoning
-                # (Thinking mode), not for a 2-3 sentence direct answer.
-                # Saving: ~9-23s of TTFT + ~200ms I/O per Concise request.
-                if mode == "thinking":
-                    rag_k = 1 if COMPUTE_PROFILE == "cpu" else 3
-                    rerank_depth = 10 if COMPUTE_PROFILE == "cpu" else 25
-                    context_str, hits = await rag_engine.retrieve_context(
-                        clean_prompt, top_k=rag_k, rerank_depth=rerank_depth
-                    )
+                # ── RAG General Mode (no audit context) ───────────────────────
+                # When operating in general DPDP law mode (RAG fallback), skip
+                # audit context entirely and answer purely from the statutory index.
+                if _rag_general_mode:
+                    sys_header = _SYS_THINKING if mode == "thinking" else _SYS_CONCISE
+                    context_str = _general_context_str
+                    # Also retrieve fresh citations for the UI
+                    _, hits = await rag_engine.retrieve_context(clean_prompt, top_k=1, rerank_depth=10)
                     citations = [h["metadata"] for h in hits]
+                    general_domain = "dpdp-general"
+                    general_history = await multi_user_session_manager.get_history(user_id, general_domain)
+                    await broadcaster.emit("citations", citations)
+                    yield f"data: {json.dumps({'event':'citations','data':citations})}\n\n"
+
+                    prompt_parts = [sys_header]
+                    if not general_history:
+                        user_block = f"{context_str}\n\nGeneral Question about DPDP Act 2023: {clean_prompt}"
+                        prompt_parts.append(f"<|im_start|>user\n{user_block}<|im_end|>\n<|im_start|>assistant\n")
+                    else:
+                        t1_u, t1_a = general_history[0]
+                        prompt_parts.append(f"<|im_start|>user\n{context_str}\n\nGeneral Question about DPDP Act 2023: {t1_u}<|im_end|>\n<|im_start|>assistant\n{t1_a}<|im_end|>\n")
+                        for u, a in general_history[1:]:
+                            prompt_parts.append(f"<|im_start|>user\nGeneral Question about DPDP Act 2023: {u}<|im_end|>\n<|im_start|>assistant\n{a}<|im_end|>\n")
+                        prompt_parts.append(f"<|im_start|>user\nGeneral Question about DPDP Act 2023: {clean_prompt}<|im_end|>\n<|im_start|>assistant\n")
+
+                    prompt = "".join(prompt_parts)
+
+                    req_id = str(uuid.uuid4())
+                    generated_tokens = []
+                    temperature_gen = 0.3 if mode == "thinking" else 0.0
+                    async for tok in llm_engine.generate_chat_stream(
+                        req_id, prompt,
+                        max_tokens=max_tokens,
+                        temperature=temperature_gen,
+                        multi_site=False,
+                    ):
+                        generated_tokens.append(tok)
+                        await broadcaster.emit("token", tok)
+                        yield f"data: {json.dumps({'event':'token','data':tok})}\n\n"
+
+                    if generated_tokens:
+                        await multi_user_session_manager.record_turn(
+                            user_id, general_domain, clean_prompt, "".join(generated_tokens)
+                        )
+
                 else:
-                    # Concise mode: retrieve citation metadata for UI badges, but omit the
-                    # heavy 50-120 token statutory text block from the LLM prompt.
-                    # Saves ~9-23s of TTFT prefill while preserving UI statutory citations.
-                    # With rerank_depth=5 on CPU, saves 80% cross-encoder evaluation time.
-                    rerank_depth = 5 if COMPUTE_PROFILE == "cpu" else 15
-                    _, hits = await rag_engine.retrieve_context(
-                        clean_prompt, top_k=1, rerank_depth=rerank_depth
-                    )
-                    citations = [h["metadata"] for h in hits]
-                    context_str = ""
+                    # ── Normal audit-context mode ──────────────────────────────
+                    # Tier 1E: Skip RAG text injection for Concise mode.
+                    # The compact chat_context already contains the statutory violation
+                    # reference (e.g. "Section 5(1) Notice Inadequate"). RAG only adds
+                    # 50-120 tokens of full statutory text needed for deep reasoning
+                    # (Thinking mode), not for a 2-3 sentence direct answer.
+                    if mode == "thinking":
+                        # Ground RAG in the audited statutory sections if the user is asking about site violations
+                        rag_query = clean_prompt
+                        if audited_contexts:
+                            sec_matches = re.findall(r"(?:Section|Sec\.?)\s*\d+(?:\(\d+\))?", all_audit_context_str, re.I)
+                            if sec_matches and any(w in clean_prompt.lower() for w in ("violation", "flagged", "evidence", "breach", "audit", "score", "why", "what")):
+                                rag_query = f"{' '.join(sec_matches[:2])} {clean_prompt}"
 
-                # Conditionally prepend [STATUTORY CONTEXT] block.
-                # When retrieve_context returns "" (no confident hits), omit it
-                # entirely — the model was trained to produce RAFT refusal phrases
-                # when context is absent, not to hallucinate from XML stubs.
-                if len(audited_contexts) == 1 and body.domain in audited_contexts:
-                    target_label = body.domain
-                else:
-                    target_label = ", ".join(audited_contexts.keys())
+                        rag_k = 1 if COMPUTE_PROFILE in ("cpu", "hybrid", "gpu-offload") else 3
+                        rerank_depth = 10 if COMPUTE_PROFILE in ("cpu", "hybrid", "gpu-offload") else 25
+                        context_str, hits = await rag_engine.retrieve_context(
+                            rag_query, top_k=rag_k, rerank_depth=rerank_depth
+                        )
+                        citations = [h["metadata"] for h in hits]
+                    else:
+                        rerank_depth = 5 if COMPUTE_PROFILE in ("cpu", "hybrid", "gpu-offload") else 15
+                        _, hits = await rag_engine.retrieve_context(
+                            clean_prompt, top_k=1, rerank_depth=rerank_depth
+                        )
+                        citations = [h["metadata"] for h in hits]
+                        context_str = ""
 
-                # Tier 1C: Restructured prompt — fixed system header enables KV prefix
-                # reuse across requests. All variable content (audit context, RAG chunk,
-                # conversation history, user question) moves to the user turn only.
-                sys_header = _SYS_CONCISE if mode == "concise" else _SYS_THINKING
+                    # Conditionally prepend [STATUTORY CONTEXT] block.
+                    if len(audited_contexts) == 1 and body.domain in audited_contexts:
+                        target_label = body.domain
+                    else:
+                        target_label = ", ".join(audited_contexts.keys())
 
-                # Multi-turn history injection
-                session_domain = body.domain if (body.domain and body.domain not in ("newtab", "blank", "localhost")) else list(audited_contexts.keys())[0]
-                history_prompt = await multi_user_session_manager.get_history_prompt(user_id, session_domain)
+                    sys_header = _SYS_CONCISE if mode == "concise" else _SYS_THINKING
 
-                user_parts = [f"[AUDIT CONTEXT]\n{all_audit_context_str}"]
-                if context_str:   # RAG block: Thinking mode only (Tier 1E)
-                    user_parts.append(context_str)
-                if history_prompt:
-                    user_parts.append(history_prompt)
-                if multi_site:
-                    user_parts.append("Instruction: Directly compare the privacy scores, violations, and statutory provisions for each mentioned site.")
-                user_parts.append(f"Question about {target_label}: {clean_prompt}")
+                    # session_domain and history_turns are already computed in outer scope
 
-                prompt = (
-                    sys_header
-                    + "<|im_start|>user\n"
-                    + "\n\n".join(user_parts)
-                    + "<|im_end|>\n"
-                    + "<|im_start|>assistant\n"
-                )
 
-                await broadcaster.emit("citations", citations)
-                yield f"data: {json.dumps({'event':'citations','data':citations})}\n\n"
+                    audit_block = f"[AUDIT CONTEXT]\n{all_audit_context_str}"
+                    prompt_parts = [sys_header]
 
-                req_id = str(uuid.uuid4())
-                generated_tokens = []
-                temperature = 0.3 if mode == "thinking" else 0.0
-                # Tier 2C: pass multi_site flag so engine can apply repetition_penalty=1.05
-                async for tok in llm_engine.generate_chat_stream(
-                    req_id, prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    multi_site=multi_site,
-                ):
-                    generated_tokens.append(tok)
-                    await broadcaster.emit("token", tok)
-                    yield f"data: {json.dumps({'event':'token','data':tok})}\n\n"
+                    if not history_turns:
+                        u_parts = [audit_block]
+                        if context_str:
+                            u_parts.append(context_str)
+                        if multi_site:
+                            u_parts.append("Instruction: Directly compare the privacy scores, violations, and statutory provisions for each mentioned site.")
+                        u_parts.append(f"Question about {target_label}: {clean_prompt}")
+                        prompt_parts.append(f"<|im_start|>user\n" + "\n\n".join(u_parts) + "<|im_end|>\n<|im_start|>assistant\n")
+                    else:
+                        t1_u, t1_a = history_turns[0]
+                        t1_parts = [audit_block, f"Question about {target_label}: {t1_u}"]
+                        prompt_parts.append(f"<|im_start|>user\n" + "\n\n".join(t1_parts) + f"<|im_end|>\n<|im_start|>assistant\n{t1_a}<|im_end|>\n")
+                        for u, a in history_turns[1:]:
+                            prompt_parts.append(f"<|im_start|>user\nQuestion about {target_label}: {u}<|im_end|>\n<|im_start|>assistant\n{a}<|im_end|>\n")
+                        curr_parts = []
+                        if context_str:
+                            curr_parts.append(context_str)
+                        if multi_site:
+                            curr_parts.append("Instruction: Directly compare the privacy scores, violations, and statutory provisions for each mentioned site.")
+                        curr_parts.append(f"Question about {target_label}: {clean_prompt}")
+                        prompt_parts.append(f"<|im_start|>user\n" + "\n\n".join(curr_parts) + "<|im_end|>\n<|im_start|>assistant\n")
 
-                if generated_tokens:
-                    await multi_user_session_manager.record_turn(
-                        user_id, session_domain, clean_prompt, "".join(generated_tokens)
-                    )
+                    prompt = "".join(prompt_parts)
+
+
+                    await broadcaster.emit("citations", citations)
+                    yield f"data: {json.dumps({'event':'citations','data':citations})}\n\n"
+
+                    req_id = str(uuid.uuid4())
+                    generated_tokens = []
+                    temperature = 0.3 if mode == "thinking" else 0.0
+                    # Tier 2C: pass multi_site flag so engine can apply repetition_penalty
+                    async for tok in llm_engine.generate_chat_stream(
+                        req_id, prompt,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        multi_site=multi_site,
+                    ):
+                        generated_tokens.append(tok)
+                        await broadcaster.emit("token", tok)
+                        yield f"data: {json.dumps({'event':'token','data':tok})}\n\n"
+
+                    if generated_tokens:
+                        await multi_user_session_manager.record_turn(
+                            user_id, session_domain, clean_prompt, "".join(generated_tokens)
+                        )
             finally:
                 memory_orchestrator.inference_queue.release()
 

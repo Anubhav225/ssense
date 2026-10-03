@@ -35,7 +35,7 @@ if [ -f "/app/scripts/generate_keys.sh" ]; then
     bash /app/scripts/generate_keys.sh 2>/dev/null || true
 fi
 
-for dir in "/app/models" "/app/.cache/huggingface" "/app/.cache/vllm" "/app/data"; do
+for dir in "/app/models" "/app/.cache/huggingface" "/app/.cache/vllm" "/app/.cache/flashinfer" "/app/data"; do
     mkdir -p "$dir"
     current_owner="$(stat -c '%u' "$dir")"
     ssense_uid="$(id -u ssense)"
@@ -94,7 +94,8 @@ elif [ "$RESOLVED_PROFILE" = "jetson" ]; then
     echo "[entrypoint] ✅ Profile configured: JETSON (VLLM_TARGET_DEVICE=cuda)"
 else
     export VLLM_TARGET_DEVICE="cuda"
-    echo "[entrypoint] ✅ Profile configured: GPU (VLLM_TARGET_DEVICE=cuda)"
+    export VLLM_USE_V1=0
+    echo "[entrypoint] ✅ Profile configured: GPU (VLLM_TARGET_DEVICE=cuda, VLLM_USE_V1=0)"
 fi
 
 exec gosu ssense "$@"
