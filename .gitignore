@@ -118,6 +118,17 @@ powershell.bat
 *.zip
 scratch/
 
+# ------------------------------------------------------------------------------
+# Academic Research & Paper Draft Materials (Kept local, excluded from repo)
+# ------------------------------------------------------------------------------
+required papers/
+docs/ssense_paper.md
+docs/ssense_equations.md
+apps/slm-server/eval_final.md
+apps/slm-server/simulate_*.py
+apps/slm-server/get_metrics.py
+apps/slm-server/evals/
+eval_final/
 
 # ------------------------------------------------------------------------------
 # Operating System & IDE Artifacts

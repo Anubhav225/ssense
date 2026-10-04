@@ -47,27 +47,14 @@ Ssense addresses all three by combining a **domain-specialized Small Language Mo
 
 The system is decomposed into four independently deployable layers:
 
-```text
-+-------------------------------------------------------------------------+
-|                     BROWSER EXTENSION (Manifest V3)                     |
-|  Content Scripts | Service Worker | Sidepanel UI | Popup | Options      |
-+----------------------------------+--------------------------------------+
-                                   | HMAC-signed API (HTTPS/SSE)
-+----------------------------------v--------------------------------------+
-|                          SLM INFERENCE SERVER                           |
-|  FastAPI  |  vLLM / HF Transformers  |  Multi-LoRA  |  Hybrid RAG      |
-|  AuditStore (SQLite)  |  SyncStore  |  MemoryOrchestrator              |
-+----------------------------------+--------------------------------------+
-                                   | Training artifacts
-+----------------------------------v--------------------------------------+
-|                          ML TRAINING PIPELINE                           |
-|  Data Forge  |  Unsloth SFT  |  SimPO Alignment  |  GGUF Export       |
-+----------------------------------+--------------------------------------+
-                                   | Loaded at inference
-+----------------------------------v--------------------------------------+
-|                    BASE MODEL: Qwen2.5-7B-Instruct                      |
-|                    HuggingFace Mono-Repo: PRiyanshu0-1/DPDP-SSense     |
-+-------------------------------------------------------------------------+
+```mermaid
+graph TD
+    A[Browser Extension Manifest V3] -->|HMAC-signed API HTTPS/SSE| B[SLM Inference Server]
+    B -->|FastAPI / vLLM / RAG Engine| C[Memory Orchestrator & AuditStore]
+    D[ML Training Pipeline] -->|SimPO Alignment / rsLoRA / Data Forge| B
+    E[Base Model: Qwen2.5-7B-Instruct] -->|Loaded at Inference| B
+    B -->|Schema Validation & SCL| F[Deterministic JSON Audit Report]
+    F -->|declarativeNetRequest| G[Network Enforcement Layer]
 ```
 
 The system deliberately separates concerns: the extension contains **zero model weights** and **zero raw policy text**. All inference happens server-side; only compact JSON audit reports are transmitted back to the client.
@@ -107,11 +94,24 @@ This forge produces training pairs where each record contains:
 - `chosen`: The highest-quality, schema-valid, non-omission audit JSON.
 - `rejected`: A response that either fabricates a violation, over-calls non-issues, or uses banned language patterns.
 
-### 3.4 Deterministic Decision Tree (`build_dpdp_tree.py`)
+### 3.4 Deterministic Decision Tree & 26/44 Statutory Pruning (`build_dpdp_tree.py`)
 
-A mathematical decision tree (compiled with Rust bindings) encodes the 44-section, 22-rule statutory structure as a directed acyclic graph. This tree is embedded into the model's structured context to provide deterministic section-lookups during inference, preventing the model from inventing section numbers.
+The DPDP Act comprises 44 sections, but not all govern Data Fiduciaries directly. Ssense employs a strict bureaucratic firewall, mechanically excluding administrative provisions (e.g., Board setup in Sections 18-26, Tribunal rules in Sections 29-32). The remaining actionable sections are mapped into a strict taxonomy of **26 distinct violation phenotypes** (e.g., `CONSENT_NOT_FREE_OR_SPECIFIC`, `DATA_RETENTION_LIMIT_EXCEEDED`). This 26/44 convergence ensures the SLM concentrates its attention heads exclusively on enforceable data privacy rules. A mathematical decision tree encodes this structure to provide deterministic section-lookups during inference, preventing the model from inventing section numbers.
 
-### 3.5 Dataset Formatting & Leaky-Split Firewall (`prepare_unsloth_data.py`)
+### 3.5 Hybrid Legal RAG Context Convergence (`build_vector_db.py`)
+
+To provide the Chatbot with grounded legal knowledge, we constructed a legally authoritative index of 237 statutory chunks. 
+The pipeline operates as follows:
+1. **Header-Preserving Chunking**: The raw legal corpus is split on structural headers (Sections, Rules) using a `RecursiveCharacterTextSplitter`. Sub-chunks retain their parent headers to maintain legal context.
+2. **Dual-Index Generation**: A Lexical BM25 Okapi index captures exact statutory phrasing, while a Dense BGE-Large-EN vector index captures semantic intent.
+3. **Retrieval Convergence**:
+   At inference, the retrieval function $R(q)$ for a query $q$ is defined as the convex combination of normalized lexical and dense scores, followed by a cross-encoder re-ranking step:
+   
+   $$ S_{hybrid}(q, c) = \alpha \cdot \text{norm}(S_{BM25}(q, c)) + (1 - \alpha) \cdot \text{norm}(S_{BGE}(q, c)) $$
+   
+   The top-K retrieved chunks form the context window, effectively converging the 237-chunk statutory universe into a precise, zero-hallucination prompt.
+
+### 3.6 Dataset Formatting & Leaky-Split Firewall (`prepare_unsloth_data.py`)
 
 - Formats all training pairs into **ChatML** (Qwen2 instruction format).
 - Applies **response-only masking**: only the assistant turn is included in the loss computation to prevent the model from learning prompt-formatting artifacts.
@@ -153,13 +153,9 @@ A **VRAM Airlock** pattern is enforced between training phases: the Stage 1 teac
 
 ### 4.4 Phase 2: Simple Preference Optimization (SimPO)
 
-**SimPO** (Simple Preference Optimization) is used instead of RLHF or DPO because it eliminates the need for a reference model, halving VRAM requirements and training time:
+**SimPO** (Simple Preference Optimization) is used instead of RLHF or DPO because it eliminates the need for a reference model, halving VRAM requirements and training time. The alignment objective is formalized as:
 
-```
-L_SimPO = -E[ log sigmoid( (beta/|y_w|) * log pi(y_w|x)
-                          - (beta/|y_l|) * log pi(y_l|x)
-                          - gamma ) ]
-```
+$$ \mathcal{L}_{\text{SimPO}} = -\mathbb{E}\left[ \log \sigma \left( \frac{\beta}{|y_w|} \log \pi_\theta(y_w | x) - \frac{\beta}{|y_l|} \log \pi_\theta(y_l | x) - \gamma \right) \right] $$
 
 Where:
 - `y_w` is the chosen (high-quality, non-hallucinating) audit response
@@ -269,6 +265,14 @@ Every audit request passes through a deterministic 6-level cache lookup chain be
 ### 6.6 `StopAtClosingBrace` — JSON-Aware Early Stopping
 
 For CPU-profile inference, a custom logits processor monitors the generated token stream and halts generation the **exact instant** a valid, closed JSON object is detected. This prevents the model from generating trailing tokens after the JSON closes, cutting CPU inference latency by up to 40%.
+
+### 6.7 The Statutory Compliance Layer (SCL) Backstop (`audit_corrector.py`)
+
+To guarantee a zero-hallucination baseline, we introduce the SCL—a deterministic regex-based post-processor. The SCL operates as a mathematically lossless union operation over the set of violations detected by the SLM ($V_{SLM}$) and the deterministic regex gates ($V_{SCL}$):
+
+$$ V_{final} = V_{SLM} \cup \{ v \in V_{SCL} \mid \text{cond}(v) = \text{True} \} $$
+
+Where $\text{cond}(v)$ represents the negation-blindness and safe-harbor evaluation filters. The SCL ensures that explicitly stated violations (e.g., "We retain data indefinitely") are never missed due to probabilistic attention limits.
 
 ---
 
@@ -565,54 +569,25 @@ A Shadow-DOM-isolated floating bubble is injected on every page, providing inlin
 
 ## 15. End-to-End Data Flow
 
-```
-USER BROWSES WEBSITE
-    |
-    v
-content/extractor.ts
-  -> discovers privacy policy URL
-  -> sends FOUND_POLICY_URL to service worker
-    |
-    v
-background/service-worker.ts
-  -> checks local IndexedDB AuditCache (< 90 days old?)
-    +-- HIT  -> serve cached result immediately (badge update)
-    +-- MISS -> call executeAuditByUrl(domain, policyUrl)
-        |
-        v
-apps/slm-server  POST /v1/audit/by-url
-  -> memory_orchestrator hot cache check
-  -> SQLite AuditStore lookup + policy hash shortcut
-  -> policy_fetcher.fetch_policy(policyUrl)
-      -> httpx async fetch (browser headers)
-      -> BeautifulSoup4 noise removal
-      -> CSS/Readability content extraction
-      -> SHA-256 hash computation
-  -> (hash hit?) -> skip inference
-  -> engine.py inference (Forensic Auditor LoRA)
-      -> Hybrid RAG context injection (BM25 + BGE + CrossEncoder)
-      -> Qwen2.5-7B-Instruct + audit adapter
-      -> StopAtClosingBrace early stopping
-      -> JSON extraction + schema validation + omission-check filter
-      -> DpdpTrustScore + SubtletyScore
-  -> AuditStore.set(domain, hash, report, chat_context)
-  -> raw policy text discarded
-    |
-    v  (AuditServerResponse JSON)
-service-worker.ts
-  -> auditCache.saveAudit(domain, report)
-  -> historyStore.recordAudit(domain, report)
-  -> badgeManager.updateBadge(tab, score)
-    |
-    v
-Sidepanel UI -> HistoryView / AuditReportView
-  -> collapsible groups, area charts, timeline, violation cards
-    |
-    v
-content/dark-pattern-blocker.ts
-  -> reads violations from local cache
-  -> applies declarativeNetRequest rules (block / strip / GPC)
-  -> api-spoof.ts (SPOOF_HARDWARE_API)
+```mermaid
+graph TD
+    A[User Browses Website] --> B[content/extractor.ts discovers URL]
+    B --> C[background/service-worker.ts]
+    C --> D{Local IndexedDB AuditCache Hit?}
+    D -->|Yes| E[Serve Cached Result & Update Badge]
+    D -->|No| F[POST /v1/audit/by-url]
+    F --> G[memory_orchestrator & SQLite AuditStore]
+    G --> H{Policy Hash Match?}
+    H -->|Yes| I[Skip Inference]
+    H -->|No| J[engine.py Inference - Forensic Auditor LoRA]
+    J --> K[JSON Schema Validation & Omission Filter]
+    K --> L[SCL Deterministic Validation]
+    L --> M[AuditStore.set & Discard Raw Text]
+    I --> M
+    M --> N[Return AuditServerResponse JSON]
+    N --> O[service-worker.ts updates local stores]
+    O --> P[Sidepanel UI updates]
+    O --> Q[content/dark-pattern-blocker.ts applies declarativeNetRequest]
 ```
 
 ---
