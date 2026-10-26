@@ -116,6 +116,9 @@ docker_logs*.txt
 powershell.bat
 .patch-round*/
 *.zip
+*.7z
+.nv/
+apps/slm-server/.nv/
 scratch/
 
 # ------------------------------------------------------------------------------

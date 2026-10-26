@@ -2,6 +2,12 @@ import asyncio
 import time
 import httpx
 import json
+import sys
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
 
 URLS = [
     {"domain": "zomato.com", "policyUrl": "https://www.zomato.com/privacy"},
@@ -40,11 +46,13 @@ async def fetch_audit(client, item, idx):
         response = await client.post(API_URL, json=item, headers=headers, timeout=300.0)
         latency = time.time() - start
         if response.status_code == 200:
-            data = response.json()
-            violations = data.get("violations", [])
+            resp_json = response.json()
+            payload = resp_json.get("data", resp_json)
+            violations = payload.get("violations", [])
+            trust_score = payload.get("dpdp_trust_score", "N/A")
             viol_count = len(violations)
-            viol_names = ", ".join([v.get("category", v.get("phenotype", "UNKNOWN")) for v in violations]) if viol_count > 0 else "-"
-            return {"domain": item["domain"], "latency": latency, "violations": viol_count, "viol_names": viol_names, "status": "success"}
+            viol_names = ", ".join([v.get("violation_type", v.get("category", "UNKNOWN")) for v in violations]) if viol_count > 0 else "-"
+            return {"domain": item["domain"], "latency": latency, "trust_score": trust_score, "violations": viol_count, "viol_names": viol_names, "status": "success"}
         else:
             return {"domain": item["domain"], "latency": latency, "status": f"error: {response.status_code} {response.text}"}
     except Exception as e:
@@ -66,9 +74,9 @@ async def main():
     total_time = time.time() - start_time
     
     print("✅ Simulation Complete. Results:")
-    print("-" * 100)
-    print(f"{'Domain':<20} | {'Latency (s)':<12} | {'Count':<6} | {'Violations Found':<30} | {'Status'}")
-    print("-" * 100)
+    print("-" * 110)
+    print(f"{'Domain':<18} | {'Latency (s)':<12} | {'Trust':<6} | {'Count':<6} | {'Violations Found':<40} | {'Status'}")
+    print("-" * 110)
     
     total_latency = 0
     success_count = 0
@@ -79,7 +87,8 @@ async def main():
         lat_str = f"{r['latency']:.2f}"
         viol_names = r.get('viol_names', '-')
         viol_count = r.get('violations', '-')
-        print(f"{r['domain']:<20} | {lat_str:<12} | {viol_count:<6} | {viol_names:<30} | {r['status']}")
+        trust_val = str(r.get('trust_score', '-'))
+        print(f"{r['domain']:<18} | {lat_str:<12} | {trust_val:<6} | {viol_count:<6} | {viol_names[:38]:<40} | {r['status']}")
         if r['status'] == 'success':
             success_count += 1
             latencies.append(r['latency'])
