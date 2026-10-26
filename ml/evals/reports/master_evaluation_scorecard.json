@@ -1,8 +1,8 @@
 {
   "report_title": "Ssense Industrial Legal AI Evaluation Report",
-  "timestamp": "2026-10-26T18:31:15.804366+00:00",
+  "timestamp": "2026-10-26T18:48:16.288248+00:00",
   "hardware_profile": {
-    "status": "offline",
+    "status": "online",
     "compute_profile": "hybrid",
     "gpu_name": "NVIDIA GeForce RTX 3060",
     "total_vram_gb": 12.0,
@@ -10,7 +10,7 @@
     "cpu_layers_count": 11,
     "vram_footprint_gb": 11.04,
     "system_ram_gb": 19.53,
-    "engine_ready": false,
+    "engine_ready": true,
     "active_adapters": [
       "audit",
       "chatbot"

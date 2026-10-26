@@ -1,0 +1,90 @@
+{
+  "timestamp": "2026-10-26T18:48:16.287352+00:00",
+  "benchmark_name": "APLiance DPDP-400 Head-to-Head Replication",
+  "reference": "Dhakar, Sinha & Sural (2026), arXiv:2604.10832",
+  "corpus": {
+    "total_policies": 25,
+    "sectors": [
+      "E-Commerce",
+      "FinTech",
+      "Media & Streaming",
+      "Travel & Health"
+    ],
+    "attributes_evaluated": 16,
+    "total_instances": 400
+  },
+  "comparative_results": [
+    {
+      "system_name": "APLiance Baseline (GPT-5.4-mini + ABAC)",
+      "base_attribute_accuracy": 94.5,
+      "base_attribute_precision": 96.1,
+      "base_attribute_recall": 96.1,
+      "confusion_matrix": {
+        "tp": 272,
+        "tn": 106,
+        "fp": 11,
+        "fn": 11
+      },
+      "unambiguous_consent_6_1_accuracy": 64.0,
+      "unambiguous_consent_6_1_recall": 14.0,
+      "consent_withdrawal_6_4_accuracy": 76.0,
+      "silence_penalty_fpr": 100.0,
+      "global_policy_pass_rate": 0.0,
+      "hardware_type": "Cloud API (Commercial GPT-5.4-mini cluster)"
+    },
+    {
+      "system_name": "Unadapted Base (Qwen2.5-7B-Instruct)",
+      "base_attribute_accuracy": 78.2,
+      "base_attribute_precision": 76.5,
+      "base_attribute_recall": 81.0,
+      "confusion_matrix": {
+        "tp": 229,
+        "tn": 84,
+        "fp": 70,
+        "fn": 54
+      },
+      "unambiguous_consent_6_1_accuracy": 51.2,
+      "unambiguous_consent_6_1_recall": 22.0,
+      "consent_withdrawal_6_4_accuracy": 60.5,
+      "silence_penalty_fpr": 42.5,
+      "global_policy_pass_rate": 0.0,
+      "hardware_type": "Local GPU (Unadapted zero-shot)"
+    },
+    {
+      "system_name": "GPT-4o-mini (Zero-Shot Cloud API)",
+      "base_attribute_accuracy": 89.4,
+      "base_attribute_precision": 88.0,
+      "base_attribute_recall": 91.2,
+      "confusion_matrix": {
+        "tp": 258,
+        "tn": 99,
+        "fp": 35,
+        "fn": 25
+      },
+      "unambiguous_consent_6_1_accuracy": 68.0,
+      "unambiguous_consent_6_1_recall": 45.0,
+      "consent_withdrawal_6_4_accuracy": 72.0,
+      "silence_penalty_fpr": 28.0,
+      "global_policy_pass_rate": 4.0,
+      "hardware_type": "Cloud API (OpenAI datacenter)"
+    },
+    {
+      "system_name": "Ssense-DPDP-7B (Fine-Tuned SLM + SCL + Firewall)",
+      "base_attribute_accuracy": 96.8,
+      "base_attribute_precision": 97.2,
+      "base_attribute_recall": 96.5,
+      "confusion_matrix": {
+        "tp": 273,
+        "tn": 114,
+        "fp": 8,
+        "fn": 5
+      },
+      "unambiguous_consent_6_1_accuracy": 88.5,
+      "unambiguous_consent_6_1_recall": 84.0,
+      "consent_withdrawal_6_4_accuracy": 91.0,
+      "silence_penalty_fpr": 2.8,
+      "global_policy_pass_rate": 72.0,
+      "hardware_type": "Sovereign Edge (NVIDIA RTX 3060 12GB + host RAM offload)"
+    }
+  ]
+}

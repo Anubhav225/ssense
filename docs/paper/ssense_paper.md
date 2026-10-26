@@ -650,7 +650,7 @@ Table XIII details the complete hardware environments, hyperparameter configurat
 | **Hybrid Retrieval Engine** | Vector & Lexical Indices | 237 chunks; BM25Okapi ($k_1=1.5, b=0.75$) + `bge-large-en-v1.5`; Re-ranker `bge-reranker-v2-m3` ($lpha=0.45$) |
 | **High-Throughput Serving** | Production Inference Engine | FastAPI + vLLM continuous batching; PagedAttention with FP8 KV cache; XGrammar pushdown CFG masking [21] |
 | **Caching Hierarchy** | Multi-Tier Deduplication | Tier 1: In-Memory LRU-TTL (512 entries, 5 min); Tier 2: Persistent SQLite (90 days); SHA-256 policy hash |
-| **Consumer Hybrid Testbed** | Unified Memory Split | 19 layers on GPU VRAM, 9 layers offloaded to CPU system RAM; throughput 0.5–18.5 tokens/s |
+| **Consumer Hybrid Testbed** | Unified Memory Split | 21 layers on GPU VRAM, 11 layers offloaded to host system RAM; throughput 0.5–18.2 tokens/s |
 | **Input Safeguards** | Extraction Caps | 8 MB HTTP response cap, 20 s timeout, 6 redirect limit, 64,000 character extraction envelope |
 | **Data Integrity Verification** | Contamination Scanner | MinHash 128-permutation LSH scanner over character 7-grams ($J < 0.15$ strict separation) |
 
@@ -722,6 +722,10 @@ In sharp contrast, Ssense resolves both foundational failures:
 1. *Elimination of the Silence Penalty:* By decoupling affirmative malpractice from statutory omission via the three-step deductive chain and omission firewall ($\mathcal{O}_{\text{practice}}$), Ssense lowers the false positive rate on contractual silence from 100.0% to **2.8%**, allowing 18 of the 25 policies (72.0%) to pass without compromising regulatory vigilance.
 2. *Resolution of Nuanced Consent Blindspots:* Through preference-aligned SimPO training on contrasting negative pairs, Ssense lifts unambiguous consent recall from 14.0% to **84.0% (+70.0 percentage point gain)** and consent withdrawal accuracy from 76.0% to **91.0% (+15.0 percentage point gain)**, decisively surpassing the cloud-hosted baseline.
 
+![Fig. 7A. Direct Head-to-Head Replication of the APLiance DPDP Benchmark](../../fig14_apliance_head_to_head_replication.png)
+
+**Fig. 7A. Direct head-to-head replication of the APLiance DPDP benchmark ($N=400$ instances across 25 corporate policies) comparing `Ssense-DPDP-7B` beside APLiance (GPT-5.4-mini + ABAC [3]), GPT-4o-mini, and Qwen2.5-7B-Instruct: (a) base statutory attribute accuracy, precision, and recall; (b) statutory consent nuance resolution, showing Ssense's +70.0% lift in §6(1) unambiguous consent recall; and (c) the silence penalty paradox, demonstrating the reduction of silence false positives from 100.0% to 2.8% and lifting strict policy pass rates from 0% to 72.0%.**
+
 ### 2. Full-Spectrum Multi-Label Benchmark on DPDP-Bench ($N=61$ Policies, 95 Violations)
 
 To evaluate multi-label issue spotting across the entire 26-node statutory violation taxonomy ($\mathcal{V}_{26}$), Table XVI benchmarks Ssense beside foundation models, commercial APIs, and domain-adapted legal models using standard NLP/ML legal evaluation metrics.
@@ -753,6 +757,10 @@ To evaluate multi-label issue spotting across the entire 26-node statutory viola
 ![Fig. 7. 8-Axis Sovereign Legal-AI Benchmark Radar](../../fig7_comparative_radar_benchmark.png)
 
 **Fig. 7. 8-Axis Sovereign Legal-AI Benchmark Radar comparing `Ssense-DPDP-7B` beside APLiance [3], GPT-4o-mini, and Qwen-Base across statutory F1, citation validity, verbatim grounding, jurisdictional isolation, omission accuracy, safe-harbor recognition, adversarial defense, and schema integrity.**
+
+![Fig. 7B. Multi-Label Statutory Violation Benchmark on DPDP-Bench](../../fig15_multilabel_legalbench_f1_mcc.png)
+
+**Fig. 7B. Multi-label statutory violation benchmark on DPDP-Bench ($N=61$ holdout policies, 95 labeled violations across 26 classes): (a) standard Stanford LegalBench metrics (Macro-F1, Micro-F1, Balanced Accuracy, and Matthews Correlation Coefficient [MCC]) comparing `Ssense Full` against SaulLM-7B, GPT-4o-mini, and base foundation models; (b) verbatim evidence grounding rate (VEGA) and complete suppression of statutory hallucinations (SHR = 0.0%) and cross-jurisdictional bleed (JCR = 0.0%).**
 
 ## C. Granular Per-Provision Statutory Classification Performance
 
@@ -936,6 +944,10 @@ In sharp contrast, `Ssense-DPDP-7B` is architected for sovereign, offline edge e
 
 *Scientific Implications of the Sovereign Edge Profile:*
 Table XXIV demonstrates that high-precision, zero-hallucination compliance verification does not require multi-million-dollar datacenter clusters or third-party cloud APIs. By partitioning the 32 Transformer layers between 12GB GDDR6 VRAM and system memory, Ssense-DPDP-7B executes a comprehensive statutory audit of a 5,000-word corporate policy in 34.2 seconds while consuming only 11.04 GiB of VRAM. Crucially, because inference occurs entirely on the local host, **zero bytes of sensitive corporate data or consumer browsing telemetry leave the machine**, achieving complete compliance with sovereign data localization and privacy-preserving audit mandates. Furthermore, when deployed by centralized regulatory bodies or consumer advocacy organizations, the underlying serving architecture seamlessly scales to concurrent multi-stream workloads via PagedAttention and prompt KV caching.
+
+![Fig. 13B. Measured Sovereign Workstation Edge Execution Profile](../../fig16_sovereign_edge_hardware_profile.png)
+
+**Fig. 13B. Measured sovereign workstation edge execution profile on an NVIDIA GeForce RTX 3060 (12 GB GDDR6 VRAM) with host RAM offloading: (a) dynamic layer allocation (21 GPU VRAM layers vs. 11 host RAM layers) and peak memory budgeting (11.04 GiB resident weights + KV headroom); (b) measured end-to-end audit latency across disparate policy lengths (from 490 to 16,000 tokens), achieving a median 34.2s audit turnaround and $<4.5$ ms cache hits with 0 bytes of cloud telemetry egress.**
 
 ## K. Summary of Empirical Findings
 
