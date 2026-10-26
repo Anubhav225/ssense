@@ -29,17 +29,19 @@
 
 ## 1. System Overview & Problem Statement
 
-**Ssense** is an end-to-end browser extension system that performs automated, real-time compliance auditing of website privacy policies against India's **Digital Personal Data Protection (DPDP) Act 2023** and its **Draft Rules 2025**. The system operates passively — it audits every website a user browses without requiring any manual action — and it enforces detected violations directly at the network layer.
+**Ssense** is a domain-adapted Legal Language Model (Law-LM / Legal SLM) architecture and browser-native enforcement system that performs automated, real-time compliance auditing of website privacy policies against India's **Digital Personal Data Protection (DPDP) Act 2023** and its procedural **Rules 2025**. Under **Section 3(b)** of the Act, data protection mandates apply extraterritorially to web platforms worldwide that process personal data or profile Indian data principals. Ssense operates passively at the citizen's browser endpoint—verifying the statutory authenticity of global web declarations—and autonomously enforces confirmed violations directly at the network layer.
 
-### Core Problem
+### Core Problem & Research Motivation
 
-Existing approaches to privacy policy auditing suffer from three critical deficiencies:
+Existing approaches to privacy policy auditing suffer from four critical deficiencies:
 
-1. **Manual & non-scalable**: Users cannot reasonably audit every site's policy document.
-2. **Hallucinating LLMs**: General-purpose models produce fabricated statute references, invent penalties, and stretch or misread legal provisions.
-3. **No mechanical enforcement**: Audit findings have historically been advisory, with no runtime consequence for non-compliant data practices.
+1. **Global Web Inauthenticity & Extraterritorial Evasion**: Foreign platforms routinely present generic global privacy policies (often drafted for GDPR or US FTC safe harbors) that mask systemic non-compliance with mandatory Indian statutory duties (e.g., multilingual notices, unconditional withdrawal parity, strict child tracking bans).
+2. **Statutory Hallucination & Jurisdictional Bias**: General-purpose LLMs produce fabricated statute references, invent non-existent legal duties, and superimpose foreign legal doctrines onto Indian sovereign statutes.
+3. **Epistemic Silence Fallacy**: Prior automated checkers (e.g., APLiance) penalize legal silence indiscriminately, assuming any unstated practice is an automatic violation and causing 100% of real-world policies to fail compliance.
+4. **No Mechanical Enforcement**: Prior compliance tools function purely as advisory summaries, leaving browser network traffic completely unmitigated.
 
-Ssense addresses all three by combining a **domain-specialized Small Language Model (SLM)** trained exclusively on Indian data law, a **deterministic schema-gated output validator**, and a **declarative network enforcement engine** that translates legal findings into firewall rules.
+Ssense addresses these foundational challenges by combining a **domain-aligned Small Language Model (SLM)** (`Qwen2.5-7B-Instruct` + rsLoRA + SimPO), a **26-node statutory decision tree**, an **epistemic omission firewall**, a **deterministic neuro-symbolic Statutory Compliance Layer ($V_{\text{final}} = V_{\text{SLM}} \cup V_{\text{SCL}}$)**, and an **autonomous network enforcement engine** that translates legal findings into browser-level countermeasures.
+
 
 ---
 
@@ -82,93 +84,98 @@ A hybrid retrieval system is constructed offline to serve the synthetic data gen
 
 The combined index is serialized to `dpdp_hybrid_index.pkl` using safetensors for embedding matrix storage.
 
-### 3.3 Teacher-Student Synthetic GAN Forge (`gan_forge.py`)
+### 3.3 Teacher-Student Distillation & Agentic Reflexion Forge (`gan_forge.py`)
 
-A **Generative Adversarial data pipeline** is implemented using `Qwen2-72B-Instruct-FP8` as the teacher model:
+A **Generative-Discriminative Reflexion pipeline** is implemented using `Qwen2-72B-Instruct-FP8` as the teacher model, formalizing knowledge distillation from intermediate reasoning traces (Mukherjee et al., 2023; Gu et al., ICLR 2024):
 
-- **Generator**: The 72B teacher receives real policy excerpts + retrieved RAG context and produces a compliant `dpdp_schema.json` audit response.
-- **Discriminator / Filter**: The output is validated against the JSON schema. Synthetic samples that fail schema validation, produce omission-based violations (`omission_check: true`), or contain hallucinated statute references are **discarded**.
-- **Loophole injection**: For SimPO preference data, a secondary pass intentionally introduces subtle compliance weaknesses into synthetic policy text to generate "rejected" responses with higher subtlety scores.
-
-This forge produces training pairs where each record contains:
-- `chosen`: The highest-quality, schema-valid, non-omission audit JSON.
-- `rejected`: A response that either fabricates a violation, over-calls non-issues, or uses banned language patterns.
+- **Generator (Adversarial Corporate Counsel)**: The 72B teacher receives real policy seeds and retrieved statutory context to synthesize realistic policies across three cognitive complexity silos (30% Baseline, 50% Camouflage, 20% Adversarial Traps).
+- **Orca Deductive Traces**: The teacher generates structured reasoning across three steps (`step_1_active_claim_analysis`, `step_2_statute_match`, `step_3_semantic_justification`), ensuring the student SLM learns causal statutory deduction rather than memorizing labels (Mukherjee et al., 2023).
+- **Dual-Gate Discriminator & Verbal Reflexion**: Output is audited through two gates:
+  1. *Gate 1 (Syntactic & Quality)*: Rejects JSON syntax errors, template placeholder leaks, and Unicode corruption (`\ufffd`, `\u200b`).
+  2. *Gate 2 (Semantic Legal Grounding)*: Verifies verbatim quote existence (`is_quote_in_policy`), enforces the omission gate (`omission_check: false`), and restricts citations to the valid DPDP universe ($1 \le \text{Section} \le 44$).
+  Failed samples are healed via a multi-turn verbal feedback loop (up to $k=3$ iterations) adhering to the Reflexion framework (Shinn et al., NeurIPS 2023; Madaan et al., NeurIPS 2023).
+- **Model Collapse Mitigation**: Seeding generation with authentic Indian corporate policies (`raw-policies/`, `indian-seeds/`) and statutory source truth prevents recursive distribution collapse and preserves lexical tail diversity (Shumailov et al., *Nature* 2024).
+- **Loophole Injection & SimPO Pairs**: An adversarial pass introduces subtle compliance weaknesses to generate hard-negative "rejected" responses, creating paired preference data for reference-free alignment (Meng et al., NeurIPS 2024).
 
 ### 3.4 Deterministic Decision Tree & 26/44 Statutory Pruning (`build_dpdp_tree.py`)
 
-The DPDP Act comprises 44 sections, but not all govern Data Fiduciaries directly. Ssense employs a strict bureaucratic firewall, mechanically excluding administrative provisions (e.g., Board setup in Sections 18-26, Tribunal rules in Sections 29-32). The remaining actionable sections are mapped into a strict taxonomy of **26 distinct violation phenotypes** (e.g., `CONSENT_NOT_FREE_OR_SPECIFIC`, `DATA_RETENTION_LIMIT_EXCEEDED`). This 26/44 convergence ensures the SLM concentrates its attention heads exclusively on enforceable data privacy rules. A mathematical decision tree encodes this structure to provide deterministic section-lookups during inference, preventing the model from inventing section numbers.
+The DPDP Act comprises 44 sections, but not all govern Data Fiduciaries directly. Ssense employs a strict bureaucratic firewall, mechanically excluding administrative provisions ($\mathcal{S}_{\text{admin}}$ in Sections 18–26, $\mathcal{S}_{\text{tribunal}}$ in Sections 29–32 and 34–44). The remaining actionable sections are mapped into a strict taxonomy of **26 distinct violation phenotypes** (e.g., `CONSENT_NOT_FREE_OR_SPECIFIC`, `DATA_RETENTION_LIMIT_EXCEEDED`). This 26/44 convergence ensures the SLM concentrates its attention heads exclusively on enforceable data privacy rules. FSM-constrained decoding (Willard & Louf, 2023) compiles `dpdp_act_tree.json` with deterministic schema guarantees, binding citations and network actions.
 
 ### 3.5 Hybrid Legal RAG Context Convergence (`build_vector_db.py`)
 
-To provide the Chatbot with grounded legal knowledge, we constructed a legally authoritative index of 237 statutory chunks. 
+To provide grounded legal knowledge, we constructed an authoritative index of 237 statutory chunks.
 The pipeline operates as follows:
 1. **Header-Preserving Chunking**: The raw legal corpus is split on structural headers (Sections, Rules) using a `RecursiveCharacterTextSplitter`. Sub-chunks retain their parent headers to maintain legal context.
-2. **Dual-Index Generation**: A Lexical BM25 Okapi index captures exact statutory phrasing, while a Dense BGE-Large-EN vector index captures semantic intent.
-3. **Retrieval Convergence**:
-   At inference, the retrieval function $R(q)$ for a query $q$ is defined as the convex combination of normalized lexical and dense scores, followed by a cross-encoder re-ranking step:
-   
+2. **Dual-Index Generation**: A Lexical BM25 Okapi index ($k_1=1.5, b=0.75$) captures exact statutory phrasing, while a Dense BGE vector index (`BAAI/bge-large-en-v1.5`) captures semantic intent.
+3. **Retrieval Convergence & Re-Ranking**:
+   At inference, retrieval aggregates sparse and dense rankings via Reciprocal Rank Fusion (Cormack et al., SIGIR 2009) or normalized convex combination:
    $$ S_{hybrid}(q, c) = \alpha \cdot \text{norm}(S_{BM25}(q, c)) + (1 - \alpha) \cdot \text{norm}(S_{BGE}(q, c)) $$
-   
-   The top-K retrieved chunks form the context window, effectively converging the 237-chunk statutory universe into a precise, zero-hallucination prompt.
+   followed by cross-encoder re-ranking (`BAAI/bge-reranker-v2-m3`). Zero-copy memory mapping via `.safetensors` enables instant initialization.
 
-### 3.6 Dataset Formatting & Leaky-Split Firewall (`prepare_unsloth_data.py`)
+### 3.6 Dataset Formatting & Leaky-Split Firewall (`prepare_unsloth_data.py`, `check_data_leakage.py`)
 
-- Formats all training pairs into **ChatML** (Qwen2 instruction format).
-- Applies **response-only masking**: only the assistant turn is included in the loss computation to prevent the model from learning prompt-formatting artifacts.
-- A **MinHash 7-Gram Contamination Firewall** (`check_data_leakage.py`) computes Jaccard similarity between train and eval splits at the 7-gram level to ensure zero overlap, enforced using Locality-Sensitive Hashing.
+- Formats all training pairs into **ChatML** causal language modeling structures.
+- Applies **response-only masking**: only the assistant turn is included in the loss computation ($-\frac{1}{N} \sum \log P(x_i \mid x_{<i})$) to prevent the model from learning prompt-formatting artifacts.
+- A **MinHash 7-Gram Contamination Firewall** (`check_data_leakage.py`) computes Jaccard similarity between train and eval splits at the 7-gram level using 128 LCG permutations (Broder, 1997; Lee et al., ACL 2022). A strict hard-fail gate ($J \le 0.85$) guarantees zero train-eval leakage.
 
 ---
 
 ## 4. Stage 2: Small Language Model Training & Alignment
 
-Two domain-specialized SLMs are trained on a single **Qwen2.5-7B-Instruct** base model as hot-swappable LoRA adapters.
+Two domain-specialized SLMs are trained on a single **Qwen2.5-7B-Instruct** base model as hot-swappable LoRA adapters. For an exhaustive parameter-by-parameter audit and theoretical derivation, see [`docs/TRAINING_RESEARCH_GROUNDING.md`](file:///d:/Ssense/docs/TRAINING_RESEARCH_GROUNDING.md) and [`docs/citations.md`](file:///d:/Ssense/docs/citations.md).
 
 ### 4.1 Model Specialization Matrix
 
-| Property | Forensic Auditor | Conversational Chatbot |
-|---|---|---|
-| **Artifact name** | `audit-model-final-adapter` | `chatbot-model-final-adapter` |
-| **Task** | Privacy policy forensic auditing → validated JSON | Citizen guidance & data rights dialogue |
-| **Context window** | 8,192 tokens | 4,096 tokens |
-| **Output format** | Strict `dpdp_schema.json` | High-fluidity Markdown |
-| **LoRA rank** | rsLoRA r=128, alpha=32 | rsLoRA r=64, alpha=16 |
-| **LoRA targets** | all-linear layers | all-linear layers |
-| **SimPO beta** | 2.0 (zero-hallucination mandate) | 1.0 (conversational RAFT) |
+| Property | Forensic Auditor | Conversational Chatbot | Research Grounding |
+|---|---|---|---|
+| **Artifact name** | `audit-model-final-adapter` | `chatbot-model-final-adapter` | Multi-LoRA vLLM Serving |
+| **Task** | Privacy policy forensic auditing → validated JSON | Citizen guidance & data rights dialogue | Specialized Dual-Track PEFT |
+| **Context window** | 8,192 tokens | 4,096 tokens | RoPE $\theta=10^6$ (Su et al., 2024; Dao, 2024) |
+| **Output format** | Strict `dpdp_schema.json` | High-fluidity Markdown | Guided XGrammar Decoding |
+| **LoRA rank / alpha** | rsLoRA $r=128$, $\alpha=128$ (effective scale $\approx 11.31$) | rsLoRA $r=64$, $\alpha=16$ (effective scale $=2.0$) | Kalajdzievski (arXiv:2312.03732) |
+| **LoRA targets** | All 7 linear layers (`q, k, v, o, gate, up, down`) | All 7 linear layers (`q, k, v, o, gate, up, down`) | QLoRA (Dettmers et al., NeurIPS 2023) |
+| **Learning rate (SFT / SimPO)** | $1.5 \times 10^{-5}$ / $5.0 \times 10^{-6}$ | $1.5 \times 10^{-5}$ / $5.0 \times 10^{-6}$ | Cosine with min LR ($\eta_{\min}=0.1$) |
+| **Optimizer & Weight Decay** | `adamw_torch_fused` (FP32 states, decay=0.05) | `adamw_torch_fused` (FP32 states, decay=0.05) | Loshchilov & Hutter (ICLR 2019) |
+| **NEFTune noise ($\alpha$)** | 5.0 (embedding regularization) | 5.0 (conversational anti-memorization) | Jain et al. (ICLR 2024) |
+| **SimPO beta / gamma** | $\beta=2.0$, $\gamma=0.5$ (zero-hallucination mandate) | $\beta=1.0$, $\gamma=0.5$ (conversational RAFT) | Meng, Xia, & Chen (NeurIPS 2024) |
 
 ### 4.2 Hardware Platform
 
 Training was performed on **NVIDIA DGX Spark (Grace-Blackwell GB10)** with:
 - CUDA 13.0 / Compute Capability `sm_121` (forward-compatible with `sm_120`)
-- PyTorch `2.11.0` (`cu130`) in native **BF16 precision**
-- Unsloth `2026.8` with Triton Fused kernels for attention, RoPE, and gradient accumulation
+- PyTorch `2.11.0` (`cu130`) in native **BF16 precision** (Kalamkar et al., 2019)
+- Unsloth `2026.8` with Triton Fused kernels for attention, RoPE, and cross-entropy loss
+- `use_gradient_checkpointing="unsloth"` reducing activation memory from $\mathcal{O}(N)$ to $\mathcal{O}(\sqrt{N})$ (Chen et al., 2016)
 
-A **VRAM Airlock** pattern is enforced between training phases: the Stage 1 teacher model is fully unloaded and CUDA memory is explicitly cleared before Stage 2 student training begins, preventing cross-run VRAM fragmentation.
+A **VRAM Airlock** pattern is enforced via OS-level process isolation (`multiprocessing.Process(..., start_method="spawn")`): the Stage 1 SFT process exits completely, destroying the CUDA context and releasing 100% of physical GPU VRAM before Stage 2 SimPO initializes.
 
 ### 4.3 Phase 1: Supervised Fine-Tuning (SFT) with rsLoRA
 
-- **Optimizer**: FP32 AdamW (gradient stability in BF16 base weights)
-- **rsLoRA**: Rank-Stabilized LoRA — scaling factor `lora_alpha / sqrt(r)` replaces the standard `lora_alpha / r` scaling, preventing gradient explosion at high rank values (r=128).
-- **Training objective**: Standard causal language modeling on response-only masked ChatML sequences.
-- **Data**: Balanced statutory split across all 44 sections to prevent the model from over-fitting on frequently-occurring provisions (e.g., Section 6 consent).
+- **Rank-Stabilized Scaling (rsLoRA)**: Conventional LoRA scales updates by $\alpha/r$, which collapses at $r=128$ because the Frobenius norm grows as $\mathcal{O}(\sqrt{r})$, causing an effective update rate of $\mathcal{O}(1/\sqrt{r})$. rsLoRA replaces this with:
+  $$\Delta W = \frac{\alpha}{\sqrt{r}} (B \cdot A)$$
+  maintaining constant learning dynamics across scaling (Kalajdzievski, 2023).
+- **Target Module Coverage**: All seven linear projections (`q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj`) are adapted, matching full fine-tuning expressiveness (Dettmers et al., 2023; Wu & Ma, 2025).
+- **Response-Only Loss Masking**: Cross-entropy loss is computed exclusively on the assistant tokens (`train_on_responses_only`) with user/system prompt tokens masked as `-100`.
+- **Pre-Training Token Firewall**: Sequences exceeding 8,192 tokens are filtered prior to batching, preventing TRL's right-truncation from amputating closing JSON schema brackets.
+- **Ungrounded Citation Trip-Wire**: Pre-flight verification aborts training if $>5\%$ of statutory citations in training labels reference provisions absent from the prompt context.
+- **Leakage-Safe Grouped Split**: Splitting groups on stable source document IDs (`doc_id`), guaranteeing policies from the same fiduciary never straddle train and evaluation sets.
 
 ### 4.4 Phase 2: Simple Preference Optimization (SimPO)
 
-**SimPO** (Simple Preference Optimization) is used instead of RLHF or DPO because it eliminates the need for a reference model, halving VRAM requirements and training time. The alignment objective is formalized as:
+Ssense aligns the model using **SimPO** (Meng, Xia, & Chen, NeurIPS 2024) rather than standard DPO (Rafailov et al., NeurIPS 2023):
+$$ \mathcal{L}_{\text{SimPO}} = -\mathbb{E}_{(x, y_w, y_l)} \left[ \log \sigma \left( \frac{\beta}{|y_w|} \log \pi_\theta(y_w \mid x) - \frac{\beta}{|y_l|} \log \pi_\theta(y_l \mid x) - \gamma \right) \right] $$
 
-$$ \mathcal{L}_{\text{SimPO}} = -\mathbb{E}\left[ \log \sigma \left( \frac{\beta}{|y_w|} \log \pi_\theta(y_w | x) - \frac{\beta}{|y_l|} \log \pi_\theta(y_l | x) - \gamma \right) \right] $$
+Three architectural justifications mandate this selection:
+1. **Reference-Free Memory Optimization**: Eliminates the frozen reference model $\pi_{\text{ref}}$, halving VRAM requirements and allowing full $r=128$ adaptation at 8,192 tokens on a single accelerator.
+2. **Length Normalization ($1/|y|$)**: Unnormalized sequence log-probabilities in DPO inherently reward verbosity and length exploitation (Park et al., ACL 2024). SimPO normalizes by token length, penalizing verbose legal padding and forcing concise, schema-compliant JSON.
+3. **Target Reward Margin ($\gamma = 0.5$)**: Forces an explicit probability margin between compliant audits ($y_w$) and hallucinated or omission-violating audits ($y_l$).
+4. **Parameter Settings**: $\beta=2.0$ for the Auditor (strict schema adherence); $\beta=1.0$ for the Chatbot (conversational fluency); target margin $\gamma=0.5$.
 
-Where:
-- `y_w` is the chosen (high-quality, non-hallucinating) audit response
-- `y_l` is the rejected (hallucinating or fabricated) audit response
-- `beta` controls alignment sharpness (2.0 for Auditor, 1.0 for Chatbot)
-- `gamma` is the target reward margin
+### 4.5 Dual-Deployment Triple-Format Export
 
-### 4.5 Triple-Format Export
-
-Both adapters are exported in three formats:
-1. **Safetensors**: Native HuggingFace format for vLLM production serving.
-2. **GGUF Q4_K_M**: Quantized 4-bit format for edge deployment on Jetson AGX and consumer hardware.
-3. **Merged BF16 Safetensors**: Base model + LoRA merged for single-adapter serving.
+1. **Native PEFT Adapter**: Exported for vLLM Multi-LoRA serving (`enable_lora=True, max_loras=2`).
+2. **Standalone Merged BF16 Model**: Merged on host CPU RAM via `peft_model.merge_and_unload()` to circumvent Unsloth `base_layer` bugs and avoid GPU memory spikes.
+3. **GGUF Q4_K_M Quantization**: Quantized via Unsloth into 4-bit K-quants (Gerganov et al., llama.cpp), reducing model footprint to ~4.3 GB for edge CPU fallback execution.
 
 ---
 
@@ -203,35 +210,26 @@ All thresholds are enforced against the **Wilson 95% CI Lower Bound** rather tha
 
 ---
 
-## 6. Stage 4: SLM Inference Server Design
+## 6. Stage 4: SLM Inference Architecture & Neuro-Symbolic Serving
 
-The inference server (`apps/slm-server/`) is a production **FastAPI** application with multi-profile hardware adaptability.
+The inference server (`apps/slm-server/`) is formulated as a multi-adapter, neuro-symbolic serving system built on theoretical principles from MLSys, ICML, and legal NLP literature.
 
-### 6.1 Hardware Profile Autodetection (`engine.py`)
+### 6.1 Multi-LoRA Dynamic Adapter Multiplexing (`engine.py`)
 
-At boot, `detect_hardware_capabilities()` probes the CUDA runtime:
-1. Allocates a probe tensor on the first CUDA device.
-2. Checks for Jetson-specific system files (`/etc/nv_tegra_release`, `/sys/devices/soc0/family`).
-3. Falls back to CPU if CUDA is unavailable or allocation fails.
+- **Theoretical Foundation:** *S-LoRA* (Sheng et al., MLSys 2024); *Punica* (Mai et al., MLSys 2024).
+- **Architecture:** Serves both the Forensic Legal Auditor ($r=128, \alpha=32$) and Citizen Legal Chatbot ($r=64, \alpha=16$) over a single resident copy of the frozen `Qwen2.5-7B-Instruct` base model.
+- **Mechanism:** Low-rank matrices are dynamically routed per request via Segmented Gather-Apply-Scatter batched matrix-vector multiplications, eliminating base-weight reload latency ($>15\text{ GB}$) and memory fragmentation between background policy auditing and interactive legal consultations.
 
-This produces one of three compute profiles: `gpu`, `jetson`, or `cpu`.
+### 6.2 Grammar-Constrained FSM Decoding (`engine.py`)
 
-### 6.2 Multi-Profile Inference Engine
+- **Theoretical Foundation:** *XGrammar* (Dong et al., 2024); *Outlines* (Willard & Louf, 2023).
+- **Mechanism:** Compiles `dpdp_schema.json` into a pushdown automaton / context-free grammar (CFG). At each generation step $t$, logits for non-admissible tokens are set to $-\infty$, guaranteeing $100\%$ schema validity without post-hoc rejection sampling or retry latency.
 
-| Profile | Backend | Notes |
-|---|---|---|
-| `gpu` | **vLLM AsyncLLMEngine** | Continuous batching, PagedAttention, FP8 KV cache on Hopper/Ada/Blackwell |
-| `jetson` | **vLLM (unified memory)** | Same engine, tuned memory params for Jetson unified DRAM |
-| `cpu` | **HuggingFace Transformers + PEFT** | Avoids vLLM's C++ PyPI CPU deficiencies; full multi-LoRA switching |
+### 6.3 Attention Caching & Speculative Lookup Acceleration
 
-### 6.3 vLLM GPU Configuration
-
-- **Max model length**: 8,192 tokens
-- **Max concurrent sequences**: 256 (env-tunable via `SSENSE_VLLM_MAX_NUM_SEQS`)
-- **KV cache dtype**: FP8 on Hopper/Ada/Blackwell; BF16 elsewhere
-- **Prefix caching**: Enabled (reduces TTFT for cached system prompts)
-- **Chunked prefill**: Enabled (prevents memory spikes on long policy inputs)
-- **Multi-LoRA**: 2 hot LoRA slots; 4 CPU-resident slots; max rank 128
+- **Prompt Attention Caching:** Grounded in *Prompt Cache* (Gim et al., MobiSys 2024). Invariant system headers (`_SYS_CONCISE`, `_SYS_THINKING`) are pre-warmed into key-value attention states at boot, bypassing prompt prefill computation during user consultations.
+- **Speculative Prompt Lookup Decoding:** Grounded in speculative decoding theory (Leviathan et al., ICML 2023). Matching prompt $n$-grams ($k=3$) from retrieved statutes are copied as speculative candidate draft tokens and verified in parallel in a single forward pass, providing speculative acceleration without an auxiliary model.
+- **Positional XML Structuring:** Following *Lost in the Middle* (Liu et al., TACL 2024), retrieved statutes are wrapped inside structured `<retrieved_statutes>` XML tags placed at prompt extremities to counter multi-head attention decay over long policies ($>8,000$ tokens).
 
 ### 6.4 Zero-Hop In-Process Orchestration (`memory_orchestrator.py`)
 

@@ -106,17 +106,31 @@ Ssense/
 │       ├── Dockerfile.cpu       CPU-only image (testing/low-traffic deployments)
 │       └── docker-compose.yml   Multi-container orchestration
 └── docs/
+    ├── README.md                Master documentation index
+    ├── paper/                   IEEE Research Paper (62 references) & methodology
+    │   ├── ssense_paper.md      Full research paper under DPDP Act 2023 & Rules 2025
+    │   └── METHODOLOGY.md       Experimental methodology & 100-policy evaluation
     ├── ARCHITECTURE.md          Full design history and current architecture
     ├── BUILD.md                 Step-by-step build guide (extension + server)
     ├── DEPLOYMENT.md            Server deployment (Docker, Nginx, env vars)
-    └── SECURITY.md              Security model, threat vectors, shared-credential rationale
+    ├── SECURITY.md              Security model, threat vectors, shared-credential rationale
+    └── MANUAL_START_GUIDE.md    Native local execution without Docker
 ```
+
+---
+
+## 🔬 Academic Research & Publications
+
+The scientific foundations, computational formalizations, and empirical evaluations of Ssense are documented in our research paper:
+
+- **Flagship Research Paper**: [`docs/paper/ssense_paper.md`](docs/paper/ssense_paper.md) — *Ssense: A Domain-Adapted Legal Small Language Model and Scalable Inference Architecture for Auditing Global Web Compliance under India's DPDP Act, 2023 and DPDP Rules, 2025* (IEEE Transactions format, 62 modern references, joint 26-node statutory reduction, dual rsLoRA adapters).
+- **Master Documentation Index**: [`docs/README.md`](docs/README.md) — Comprehensive guide to all architecture, research groundings, deployment guides, and evaluation harnesses.
 
 ---
 
 ## 🚀 Quick Start
 
-> 📖 **New User?** Follow the complete, step-by-step [**Manual Quickstart & Operations Guide (MANUAL_START_GUIDE.md)**](MANUAL_START_GUIDE.md) to start the SLM Server, configure Cloudflare Tunnels (named custom domain or quick tunnel), and load the Chrome Extension.
+> 📖 **New User?** Follow the complete, step-by-step [**Manual Quickstart & Operations Guide**](docs/MANUAL_START_GUIDE.md) to start the SLM Server, configure Cloudflare Tunnels (named custom domain or quick tunnel), and load the Chrome Extension.
 
 ### For End Users
 Install from the Chrome Web Store. That's it. Ssense connects to our centrally-hosted server automatically — no key, no URL, no download.
