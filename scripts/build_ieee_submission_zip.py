@@ -27,14 +27,17 @@ STAGING_DIR.mkdir(parents=True, exist_ok=True)
 (STAGING_DIR / "paper").mkdir(exist_ok=True)
 (STAGING_DIR / "figures").mkdir(exist_ok=True)
 (STAGING_DIR / "eval_data").mkdir(exist_ok=True)
+(STAGING_DIR / "eval_runners").mkdir(exist_ok=True)
 (STAGING_DIR / "statutory_schemas").mkdir(exist_ok=True)
 (STAGING_DIR / "scripts").mkdir(exist_ok=True)
 
 # 1. Copy Paper Documents
-for f in ["ssense_paper.md", "METHODOLOGY.md", "ssense_equations.md", "eval_final.md"]:
+for f in ["ssense_paper.md", "METHODOLOGY.md", "ssense_equations.md", "eval_final.md", "Evaluation.md"]:
     src = BASE_DIR / "docs" / "paper" / f
     if not src.exists():
         src = BASE_DIR / "docs_final" / "paper" / f
+    if not src.exists():
+        src = BASE_DIR / "docs" / f
     if src.exists():
         shutil.copy2(src, STAGING_DIR / "paper" / f)
 
@@ -58,22 +61,31 @@ for f in BASE_DIR.glob("ssense_extension_walkthrough.*"):
 eval_files = [
     BASE_DIR / "evaluation_results_comprehensive.json",
     BASE_DIR / "eval_metrics.csv",
-    BASE_DIR / "ml" / "evals" / "reports" / "master_evaluation_metrics.json",
-    BASE_DIR / "ml" / "evals" / "reports" / "apliance_replication_benchmark.json",
-    BASE_DIR / "ml" / "evals" / "holdout_policies" / "ground_truth_test_set.json",
+    BASE_DIR / "EVALUATION_REPORT.md",
+    BASE_DIR / "ml" / "evals" / "reports" / "master_evaluation_scorecard.json",
+    BASE_DIR / "ml" / "evals" / "reports" / "apliance_replication_report.json",
+    BASE_DIR / "ml" / "evals" / "holdout_policies" / "ground_truth.json",
     BASE_DIR / "ml" / "evals" / "benchmarks" / "security_adversarial_suite.json",
-    BASE_DIR / "ml" / "evals" / "benchmarks" / "dpdp_chatbot_qa_bench.json",
-    BASE_DIR / "ml" / "evals" / "benchmarks" / "dpdp_rag_tests.json",
-    BASE_DIR / "ml" / "evals" / "benchmarks" / "redteam_hallucination_probes.json",
+    BASE_DIR / "ml" / "evals" / "benchmarks" / "dpdp_chatbot_qa.json",
+    BASE_DIR / "ml" / "evals" / "benchmarks" / "dpdp_rag_testset.json",
+    BASE_DIR / "ml" / "evals" / "benchmarks" / "redteam_hallucination_prompts.json",
     BASE_DIR / "scratch" / "manual_audit_verification_10sites.json",
     BASE_DIR / "scratch" / "audit_10sites_results.json",
     BASE_DIR / "scratch" / "chat_10sites_results.json",
     BASE_DIR / "scratch" / "chat_modes_benchmark.json",
+    BASE_DIR / "docs" / "Evaluation.md",
 ]
 
 for ef in eval_files:
     if ef.exists():
         shutil.copy2(ef, STAGING_DIR / "eval_data" / ef.name)
+
+# 3B. Copy Evaluation Runner Scripts (for peer-review reproducibility)
+eval_runner_dir = BASE_DIR / "ml" / "evals"
+if eval_runner_dir.exists():
+    for f in eval_runner_dir.glob("*.py"):
+        if f.is_file():
+            shutil.copy2(f, STAGING_DIR / "eval_runners" / f.name)
 
 # 4. Copy Statutory Schemas & Decision Tree
 schema_files = [
@@ -151,14 +163,30 @@ ssense_final_paperieee/
 ├── eval_data/                              # Empirical Benchmarks, Holdouts, and Raw Ground Truth
 │   ├── evaluation_results_comprehensive.json # Master benchmark metrics across all baselines
 │   ├── eval_metrics.csv                    # Tabular metrics for paper tables
-│   ├── apliance_replication_benchmark.json # 400-instance APLiance head-to-head replication data
-│   ├── ground_truth_test_set.json          # 61 holdout corporate policies with 95 ground-truth labels
-│   ├── security_adversarial_suite.json     # Adversarial injection, sycophancy, & 2D-NIAH test suite
-│   ├── dpdp_chatbot_qa_bench.json          # Interactive citizen legal dialogue evaluation set
-│   ├── dpdp_rag_tests.json                 # Statutory retrieval grounding test queries
-│   ├── redteam_hallucination_probes.json   # Confabulation and fake safe-harbor probe suite
+│   ├── EVALUATION_REPORT.md                # Exhaustive industrial evaluation report
+│   ├── master_evaluation_scorecard.json   # Master evaluation scorecard & rubric
+│   ├── apliance_replication_report.json    # 400-instance APLiance head-to-head replication data
+│   ├── ground_truth.json                   # 61 holdout corporate policies with 95 ground-truth labels
+│   ├── security_adversarial_suite.json     # Adversarial injection, sycophancy, & 2D-NIAH test suite (500KB)
+│   ├── dpdp_chatbot_qa.json                # Interactive citizen legal dialogue evaluation set
+│   ├── dpdp_rag_testset.json               # Statutory retrieval grounding test queries
+│   ├── redteam_hallucination_prompts.json  # Confabulation and fake safe-harbor probe suite
 │   ├── audit_10sites_results.json          # Real-world fiduciary compliance audit outputs
-│   └── manual_audit_verification_10sites.json # Double-blind human advocate validation annotations
+│   ├── chat_10sites_results.json           # Real-world legal consultation chat outputs
+│   ├── chat_modes_benchmark.json           # Fast vs Rigorous vs Comprehensive performance benchmarks
+│   ├── manual_audit_verification_10sites.json # Double-blind human advocate validation annotations
+│   └── Evaluation.md                       # Comprehensive evaluation methodology and results
+│
+├── eval_runners/                           # Autonomous Evaluation Test Runners (ml/evals)
+│   ├── run_apliance_benchmark.py           # APLiance replication benchmark runner
+│   ├── run_accuracy_evals.py               # Statutory accuracy & multi-label evaluation runner
+│   ├── run_security_evals.py               # Adversarial defense & prompt injection testing runner
+│   ├── run_hallucination_benchmark.py      # Safe-harbor confabulation & probe benchmark runner
+│   ├── run_chatbot_evals.py                # Citizen legal consultation dialogue evaluation runner
+│   ├── run_grammar_evals.py                # CFG pushdown automaton grammar decoding test runner
+│   ├── benchmark_latency.py                # Sovereign edge inference & memory profiling runner
+│   ├── evaluate_rag.py                     # Statutory RAG retrieval grounding evaluation runner
+│   └── metrics.py, stats.py, verify.py     # Deontic metrics and statistical verification utilities
 │
 ├── statutory_schemas/                      # Formal Computational Representation of Indian Law
 │   ├── dpdp_act_tree.json                  # 26-node formal statutory decision tree (DPDP 2023 & Rules 2025)
