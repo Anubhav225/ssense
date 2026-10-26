@@ -210,10 +210,13 @@ export const HistoryView: React.FC<{ onBack: () => void; onOpenPrivacy?: (domain
   const { rows, loading } = useSites();
   const { state: sync, syncNow } = useSyncState();
   const { auth } = useAuth();
-  const [sort, setSort] = useState<SortKey>('attention');
-  const [filter, setFilter] = useState<Filter>('all');
+  const queryFilter = typeof window !== 'undefined' ? (new URLSearchParams(window.location.search).get('filter') as Filter) : null;
+  const [filter, setFilter] = useState<Filter>(queryFilter || 'all');
+  const querySort = typeof window !== 'undefined' ? (new URLSearchParams(window.location.search).get('sort') as SortKey) : null;
+  const [sort, setSort] = useState<SortKey>(querySort || 'attention');
   const [q, setQ] = useState('');
-  const sites = useOpenSet();
+  const querySites = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('openSites') : null;
+  const sites = useOpenSet(querySites ? querySites.split(',') : []);
   const groupsClosed = useOpenSet();
   const { msg, show } = useToast();
   const listRef = useRef<HTMLDivElement>(null);

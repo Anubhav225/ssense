@@ -94,6 +94,7 @@ script_files = [
     BASE_DIR / "scripts" / "generate_paper_eval_figures.py",
     BASE_DIR / "scripts" / "generate_additional_paper_figures.py",
     BASE_DIR / "scripts" / "generate_extension_figures_and_walkthrough.py",
+    BASE_DIR / "scripts" / "generate_extension_history_figure.py",
     BASE_DIR / "scripts" / "test_single_chat.py"
 ]
 
@@ -142,6 +143,8 @@ ssense_final_paperieee/
 │   ├── fig12_adversarial_security.png/.svg # Fig 12 / Fig 13: Adversarial Security Resilience (97.9%)
 │   ├── fig13B_sovereign_edge.png/.svg      # Fig 13B / Fig 16: Measured Workstation Profile (RTX 3060)
 │   ├── fig17_extension_multipanel_live.png # Fig 13C: Live Browser Extension & Sovereign Client UI
+│   ├── fig24_extension_audit_pipeline_history.png/.svg # Fig 13D / Fig 24: Extension Audit Pipeline History & Portfolio
+│   ├── fig25_best_performing_fiduciaries_dpdp_benchmark.png/.svg # Fig 13E / Fig 25: Statutory Benchmark of Best-Performing Sites
 │   ├── ssense_extension_walkthrough.webp   # Public Release Animated Walkthrough Video (WebP)
 │   └── ssense_extension_walkthrough.gif    # Public Release High-Res Animated Walkthrough (GIF)
 │
@@ -166,6 +169,7 @@ ssense_final_paperieee/
     ├── generate_paper_eval_figures.py      # Generates Fig 14 (APLiance), Fig 15 (LegalBench), Fig 16 (Edge)
     ├── generate_additional_paper_figures.py# Generates Fig 21 (Jurisdiction), Fig 22 (Cases), Fig 23 (Serving)
     ├── generate_extension_figures_and_walkthrough.py # Generates live multi-panel UI figure & animations
+    ├── generate_extension_history_figure.py# Generates Fig 24 (Audit Pipeline History) & Fig 25 (Best Fiduciaries)
     └── test_single_chat.py                 # Live HMAC-SHA256 authenticated streaming test client
 ```
 
@@ -178,12 +182,14 @@ ssense_final_paperieee/
 python scripts/generate_paper_eval_figures.py
 python scripts/generate_additional_paper_figures.py
 python scripts/generate_extension_figures_and_walkthrough.py
+python scripts/generate_extension_history_figure.py
 ```
 
 ### 2. Verify Sovereign SLM Inference on NVIDIA RTX 3060 (12GB)
 ```bash
 python scripts/test_single_chat.py
 ```
+
 """
 
 with open(STAGING_DIR / "README.md", "w", encoding="utf-8") as f:

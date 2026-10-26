@@ -27,7 +27,8 @@ export function SignInGate({ onDone }: { onDone: () => void }) {
 }
 
 function App() {
-  const [view, setView] = useState<View>('audit');
+  const queryView = typeof window !== 'undefined' ? (new URLSearchParams(window.location.search).get('view') as View) : null;
+  const [view, setView] = useState<View>(queryView || 'audit');
   const [domain, setDomain] = useState<string | null>(null);
   const { auth } = useAuth();
   const { prefs } = usePrefs();

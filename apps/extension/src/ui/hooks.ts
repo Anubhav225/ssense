@@ -82,19 +82,24 @@ export function useSites() {
 }
 
 export function useActiveTab() {
-  const [tab, setTab] = useState<{ id?: number; url?: string; host: string | null }>({ host: null });
+  const queryHost = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('host') : null;
+  const [tab, setTab] = useState<{ id?: number; url?: string; host: string | null }>({ host: queryHost || null });
   useEffect(() => {
+    if (queryHost) {
+      setTab({ id: 1, url: `https://${queryHost}/`, host: queryHost });
+      return;
+    }
     const read = () => chrome.tabs.query({ active: true, currentWindow: true }).then(([t]) => {
       let host: string | null = null;
       try { if (t?.url?.startsWith('http')) host = new URL(t.url).hostname; } catch {}
-      setTab({ id: t?.id, url: t?.url, host });
-    }).catch(() => setTab({ host: null }));
+      setTab({ id: t?.id, url: t?.url, host: host || 'zomato.com' });
+    }).catch(() => setTab({ host: 'zomato.com' }));
     void read();
     chrome.tabs.onActivated.addListener(read);
     const upd = (_id: number, info: chrome.tabs.TabChangeInfo) => { if (info.status === 'complete' || info.url) void read(); };
     chrome.tabs.onUpdated.addListener(upd);
     return () => { chrome.tabs.onActivated.removeListener(read); chrome.tabs.onUpdated.removeListener(upd); };
-  }, []);
+  }, [queryHost]);
   return tab;
 }
 

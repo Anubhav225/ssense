@@ -130,7 +130,7 @@ export const Collapsible: React.FC<{
         <Icon name="chevron" size={15} className="sx-chev" />
         {header}
       </button>
-      <div className="sx-coll-body" id={bodyId} role="region" hidden={undefined} aria-hidden={!open}>
+      <div className="sx-coll-body" id={bodyId} role="region" hidden={undefined} aria-hidden={!open} style={open ? { gridTemplateRows: '1fr', display: 'grid' } : undefined}>
         <div className="sx-coll-inner" {...(!open ? { inert: '' as any } : {})}>{children}</div>
       </div>
     </div>

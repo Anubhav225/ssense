@@ -116,6 +116,7 @@ docker_logs*.txt
 powershell.bat
 .patch-round*/
 *.zip
+!ssense_final_paperieee.zip
 *.7z
 .nv/
 apps/slm-server/.nv/

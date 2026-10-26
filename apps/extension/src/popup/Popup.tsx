@@ -58,7 +58,8 @@ const Main: React.FC<{
   update: ReturnType<typeof usePrefs>['update'];
   onDoneAuth?: () => void;
 }> = ({ auth, prefs, update }) => {
-  const [tab, setTab] = useState<Tab>('site');
+  const queryTab = typeof window !== 'undefined' ? (new URLSearchParams(window.location.search).get('tab') as Tab) : null;
+  const [tab, setTab] = useState<Tab>(queryTab || 'site');
   const [guestNoticeDismissed, setGuestNoticeDismissed] = useState(false);
   const { rows, loading } = useSites();
   const { state: sync, syncNow } = useSyncState();
@@ -292,8 +293,17 @@ const ThisSite: React.FC<{ host: string | null; rows: SiteRow[]; loading: boolea
 
 // ─── All sites ────────────────────────────────────────────────────────────────
 const AllSites: React.FC<{ rows: SiteRow[]; summary: ReturnType<typeof summarize>; loading: boolean }> = ({ rows, summary, loading }) => {
-  const openSet = useOpenSet();
-  const sorted = useMemo(() => [...rows].sort(byAttention).slice(0, 60), [rows]);
+  const openParam = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('open') : null;
+  const initialOpen = openParam ? openParam.split(',') : ['paytm.com', 'zomato.com'];
+  const openSet = useOpenSet(initialOpen);
+  const querySort = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('sort') : null;
+  const sorted = useMemo(() => {
+    const list = [...rows];
+    if (querySort === 'best' || querySort === 'score_desc') {
+      return list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    }
+    return list.sort(byAttention).slice(0, 60);
+  }, [rows, querySort]);
   if (loading) return <><div className="sx-skel" style={{ height: 64 }} /><div className="sx-skel" style={{ height: 48 }} /><div className="sx-skel" style={{ height: 48 }} /></>;
   if (!rows.length) return <Empty icon="history" title="No sites yet" text="Browse as usual — every site you open shows up here with its compliance status." />;
 
@@ -346,7 +356,7 @@ const AllSites: React.FC<{ rows: SiteRow[]; summary: ReturnType<typeof summarize
                     {r.violations.length > 3 && <li className="sx-muted">+{r.violations.length - 3} more</li>}
                   </ul>
                 </>
-              ) : <div className="sx-muted" style={{ fontSize: 12 }}>{r.error || STATUS_META[r.status].hint}</div>}
+              ) : <div className="sx-muted" style={{ fontSize: 12 }}>{(r.entry.lastReport as any)?.summary || r.entry.lastReport?.global_legal_reasoning || r.error || STATUS_META[r.status].hint}</div>}
               <button className="sx-btn sx-btn--sm" onClick={async () => { await openSidePanel('history', r.domain); window.close(); }}>Full details <Icon name="external" size={12} /></button>
             </div>
           </Collapsible>
