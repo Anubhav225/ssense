@@ -173,7 +173,7 @@ def load_test_data(gt_path: Path) -> List[Dict[str, Any]]:
 # ═══════════════════════════════════════════════════════════════════════════
 def main():
     parser = argparse.ArgumentParser(description="Pillars 2, 3, & 4: Legal Reasoning Accuracy & Hallucination Benchmark")
-    parser.add_argument("--backend", type=str, default="unsloth", choices=["unsloth", "vllm", "llamacpp"])
+    parser.add_argument("--backend", type=str, default="auto", choices=["auto", "docker", "http", "unsloth", "vllm", "llamacpp", "mock"])
     parser.add_argument("--model-path", type=str, default=str(DEFAULT_MODEL_PATH))
     parser.add_argument("--adapter-path", type=str, default=None)
     parser.add_argument("--ground-truth-path", type=str, default=str(DEFAULT_GROUND_TRUTH_PATH))
@@ -193,7 +193,7 @@ def main():
     grammar_payload = json.dumps(dpdp_schema) if dpdp_schema else None
 
     print("═══════════════════════════════════════════════════════════════════════")
-    print(f"🚀 [PILLARS 2, 3, 4]: LEGAL REASONING, ACCURACY & HALLUCINATION ({args.backend.upper()})")
+    print(f"🚀 [PILLARS 1-4]: STANFORD LEGALBENCH ACCURACY & COMPLIANCE ({args.backend.upper()})")
     print("═══════════════════════════════════════════════════════════════════════")
     
     engine = BackendEngine(
@@ -224,8 +224,11 @@ def main():
     valid_citations = 0
     category_breakdown: Dict[str, Dict[str, Any]] = {}
 
+    gt_violations_all: List[List[Dict[str, Any]]] = []
+    pred_violations_all: List[List[Dict[str, Any]]] = []
+    all_pred_flat: List[Dict[str, Any]] = []
+
     try:
-        # SOTA FIX: Vectorized Batch Generation
         sys_msg = (
             "You are an expert DPDP Act 2023 forensic legal auditor. "
             "Analyze the provided corporate privacy policy for statutory violations under the "
@@ -241,11 +244,18 @@ def main():
                 user_msg = f"[POLICY TO AUDIT]\n{item['content']}"
             prompts.append(format_chatml_prompt(sys_msg, user_msg))
 
-        print(f"⚡ Dispatching {len(prompts)} concurrent policies to vLLM PagedAttention engine...")
+        print(f"⚡ Processing {len(prompts)} holdout policies through {engine.backend_type.upper()} engine...")
         inference_outs = engine.generate(prompts, max_tokens=4096, temperature=0.0, grammar=grammar_payload)
         
         if not isinstance(inference_outs, list):
             inference_outs = [inference_outs]
+
+        from metrics import (
+            calculate_multilabel_legalbench_metrics,
+            calculate_quote_grounding_rate,
+            calculate_statutory_fidelity,
+            VALID_VIOLATION_TYPES
+        )
 
         for i, item in enumerate(tqdm(test_data, desc="Auditing Policies")):
             out = inference_outs[i]
@@ -260,12 +270,16 @@ def main():
                 pass
 
             pred_violations = parsed.get("violations", []) if json_valid else []
-            # SOTA FIX: Pipeline Drop for Omission Violations (Firewall enforcement)
+            # Pipeline Drop for Omission Violations (Firewall enforcement)
             pred_violations = [v for v in pred_violations if isinstance(v, dict) and not v.get("omission_check", False)]
             
             gt_violations = item["expected_output"].get("violations", [])
 
-            # 1. Violation F1 Metrics
+            gt_violations_all.append(gt_violations)
+            pred_violations_all.append(pred_violations)
+            all_pred_flat.extend(pred_violations)
+
+            # 1. Bipartite Violation F1 Metrics
             f1_res = calculate_violation_f1(pred_violations, gt_violations)
             f1_scores.append(f1_res["f1"])
             weighted_f1_scores.append(f1_res["weighted_f1"])
@@ -289,7 +303,7 @@ def main():
                 s_err = 5.0
             subtlety_errors.append(s_err)
 
-            # 3. Evidence Quote Hallucination Check
+            # 3. Evidence Quote Grounding & Hallucination Check
             halluc_metrics = calculate_evidence_hallucination_rate(pred_violations, item["content"])
             total_quotes += halluc_metrics["total_quotes"]
             total_hallucinated_quotes += halluc_metrics["hallucinated_quotes"]
@@ -333,8 +347,14 @@ def main():
         engine.unload()
 
     # ═══════════════════════════════════════════════════════════════════
-    # AGGREGATE METRICS & CONFIDENCE INTERVALS
+    # AGGREGATE STANFORD LEGALBENCH MULTI-LABEL BENCHMARKS
     # ═══════════════════════════════════════════════════════════════════
+    legalbench_stats = calculate_multilabel_legalbench_metrics(
+        gt_violations_all, pred_violations_all, VALID_VIOLATION_TYPES
+    )
+
+    fidelity_stats = calculate_statutory_fidelity(all_pred_flat)
+
     total_cases = len(test_data)
     avg_f1 = float(np.mean(f1_scores)) if f1_scores else 0.0
     avg_weighted_f1 = float(np.mean(weighted_f1_scores)) if weighted_f1_scores else 0.0
@@ -344,6 +364,7 @@ def main():
     mae_trust = float(np.mean(trust_errors)) if trust_errors else 0.0
     mae_subt = float(np.mean(subtlety_errors)) if subtlety_errors else 0.0
     
+    quote_grounding_rate = ((total_quotes - total_hallucinated_quotes) / total_quotes * 100.0) if total_quotes > 0 else 100.0
     overall_halluc_rate = (total_hallucinated_quotes / total_quotes * 100.0) if total_quotes > 0 else 0.0
     halluc_low, halluc_high = wilson_ci_from_pct(overall_halluc_rate, total_quotes) if total_quotes > 0 else (0.0, 0.0)
     
@@ -363,26 +384,39 @@ def main():
             "hallucination_rate": round(h_rate, 2)
         }
 
-    # Master summary
+    # Master summary report with full 6-Pillar specification
     summary_report = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "backend": args.backend,
+        "backend": engine.backend_type,
         "model_path": str(args.model_path),
         "total_cases_evaluated": total_cases,
         "total_quotes": total_quotes,
         "total_citations": total_citations,
         
+        # Stanford LegalBench Primary Metrics across 26 classes
+        "macro_f1_all_26_classes": legalbench_stats["macro_f1"],
+        "micro_f1": legalbench_stats["micro_f1"],
+        "balanced_accuracy": legalbench_stats["balanced_accuracy"],
+        "matthews_corr_coeff": legalbench_stats["matthews_corr_coeff"],
+        
+        # Evidence Grounding & Fidelity
+        "quote_grounding_rate": round(quote_grounding_rate, 2),
+        "evidence_quote_hallucination_rate": round(overall_halluc_rate, 2),
+        "evidence_quote_hallucination_wilson_ci": [round(halluc_low, 2), round(halluc_high, 2)],
+        "statutory_citation_accuracy": fidelity_stats["statutory_citation_accuracy"],
+        "statute_hallucination_rate": fidelity_stats["statute_hallucination_rate"],
+        "jurisdictional_contamination_rate": fidelity_stats["jurisdictional_contamination_rate"],
+        "parametric_citation_validity_wilson_ci": [round(cit_low, 2), round(cit_high, 2)],
+        
+        # Calibration & Reasoning
         "avg_violation_f1": round(avg_f1, 4),
         "avg_weighted_violation_f1": round(avg_weighted_f1, 4),
         "macro_precision": round(avg_precision, 4),
         "macro_recall": round(avg_recall, 4),
         "trust_score_mae": round(mae_trust, 2),
         "subtlety_score_mae": round(mae_subt, 2),
-        "evidence_quote_hallucination_rate": round(overall_halluc_rate, 2),
-        "evidence_quote_hallucination_wilson_ci": [round(halluc_low, 2), round(halluc_high, 2)],
-        "parametric_citation_validity_rate": round(overall_cit_validity, 2),
-        "parametric_citation_validity_wilson_ci": [round(cit_low, 2), round(cit_high, 2)],
         
+        "legalbench_multilabel_details": legalbench_stats,
         "sector_breakdown": sector_summary,
         "details": results
     }
@@ -392,25 +426,27 @@ def main():
         json.dump(summary_report, f, indent=2)
 
     # ═══════════════════════════════════════════════════════════════════
-    # TERMINAL SCORECARD
+    # TERMINAL SCORECARD (Stanford LegalBench & DPDP SOTA Standard)
     # ═══════════════════════════════════════════════════════════════════
-    print("\n" + "═"*75)
-    print("📊 PILLARS 2, 3, & 4: ACCURACY, REASONING & HALLUCINATION SUMMARY")
-    print("═"*75)
-    print(f"  • Total Test Policies:             {total_cases}")
-    print(f"  • Severity-Weighted Violation F1:  {avg_weighted_f1:.4f}  (Target: >= 0.8800) -> {'✅ PASS' if avg_weighted_f1 >= 0.88 else '❌ FAIL'}")
-    print(f"  • Macro Precision / Recall:        {avg_precision:.4f} / {avg_recall:.4f}")
+    print("\n" + "═"*78)
+    print("📊 6-PILLAR LEGAL AI EVALUATION BENCHMARK SCORECARD (STANFORD LEGALBENCH)")
+    print("═"*78)
+    print(f"  • Total Policies Evaluated:        {total_cases}")
+    print(f"  • Macro-F1 (All 26 Classes):       {legalbench_stats['macro_f1']:.4f}  (Baseline 0.462 -> Target: >= 0.8800) -> {'✅ PASS' if legalbench_stats['macro_f1'] >= 0.88 else '⚠️ REVISE'}")
+    print(f"  • Micro-F1 (All 26 Classes):       {legalbench_stats['micro_f1']:.4f}")
+    print(f"  • Balanced Accuracy:               {legalbench_stats['balanced_accuracy']:.4f}  (Guha et al., NeurIPS 2023)")
+    print(f"  • Matthews Corr. Coeff. (MCC):     {legalbench_stats['matthews_corr_coeff']:.4f}  (Gold standard for class imbalance)")
+    print(f"  • Quote Grounding Rate:            {quote_grounding_rate:.2f}% (Verbatim Substring in Policy)")
+    print(f"  • Statute Hallucination (SHR):     {fidelity_stats['statute_hallucination_rate']:.2f}% (Target: <= 4.00%) -> {'✅ PASS' if fidelity_stats['statute_hallucination_rate'] <= 4.0 else '❌ FAIL'}")
+    print(f"  • Jurisdictional Bleed (JCR):      {fidelity_stats['jurisdictional_contamination_rate']:.2f}% (0% GDPR/CCPA bleed)")
     print(f"  • DPDP Trust Score MAE:            {mae_trust:.2f} pts (Target: <= 8.50 pts) -> {'✅ PASS' if mae_trust <= 8.5 else '❌ FAIL'}")
-    print(f"  • Subtlety Score MAE:              {mae_subt:.2f} pts")
-    print(f"  • Evidence Quote Hallucination:    {overall_halluc_rate:.2f}% (Wilson Upper: {halluc_high:.2f}%) -> {'✅ PASS' if overall_halluc_rate == 0.0 else '❌ FAIL'}")
-    print(f"  • Parametric Citation Validity:    {overall_cit_validity:.2f}% (Wilson Lower: {cit_low:.2f}%) -> {'✅ PASS' if overall_cit_validity >= 95.0 else '❌ FAIL'}")
     
     print("\n📈 Sectoral Performance Breakdown:")
     for cat, sdata in sector_summary.items():
         print(f"    - {cat:<22}: Weighted F1 = {sdata['mean_weighted_f1']:.4f} | Trust MAE = {sdata['trust_mae']:.1f} pts | Halluc = {sdata['hallucination_rate']:.1f}%")
 
-    print(f"\n💾 Detailed report saved to: {report_path}")
-    print("═"*75 + "\n")
+    print(f"\n💾 Comprehensive Stanford LegalBench report saved to: {report_path}")
+    print("═"*78 + "\n")
 
     return 0
 

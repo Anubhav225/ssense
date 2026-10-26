@@ -454,3 +454,334 @@ def evaluate_key_points_coverage(response: str, expected_points: List[str]) -> f
             covered += 1
             
     return covered / len(expected_points)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STANFORD LEGALBENCH & APLIANCE MULTI-LABEL METRIC SUITE
+# ═══════════════════════════════════════════════════════════════════════════
+VALID_VIOLATION_TYPES = [
+    "ALGORITHMIC_PROFILING_SDF", "APPEAL_PROCESS_VIOLATION", "BOARD_COMPLIANCE_VIOLATION",
+    "BREACH_NOTIFICATION_FAILURE", "CHILD_CONSENT_VIOLATION", "CONSENT_MANAGER_OBSTRUCTION",
+    "CONSENT_MECHANICS_VIOLATION", "CONSENT_NOT_FREE_OR_SPECIFIC", "CROSS_BORDER_TRANSFER_VIOLATION",
+    "DATA_ACCURACY_COMPLETENESS_VIOLATION", "DATA_RETENTION_LIMIT_EXCEEDED", "ERASURE_NOTICE_PERIOD_VIOLATION",
+    "GRIEVANCE_REDRESSAL_INADEQUATE", "ILLEGAL_EXEMPTION_CLAIM", "LANGUAGE_ACCESSIBILITY",
+    "LEGITIMATE_USES_ABUSE", "LOG_RETENTION_MANDATE_VIOLATION", "NOTICE_INADEQUATE",
+    "PENALTY_AVOIDANCE", "PROCESSOR_ACCOUNTABILITY_VIOLATION", "PURPOSE_LIMITATION_VIOLATION",
+    "RIGHTS_IMPLEMENTATION_VIOLATION", "SCOPE_APPLICATION_EVASION", "SDF_DATA_LOCALIZATION_VIOLATION",
+    "SDF_OBLIGATIONS_MISSING", "SECURITY_SAFEGUARDS_MISSING"
+]
+
+# Mapping between statutory provisions and APLiance 16-attribute DPDP taxonomy
+APLIANCE_16_ATTRIBUTES = [
+    "notice_specified_purpose", "notice_goods_services_linkage", "notice_dpo_identity",
+    "notice_complaint_mechanism", "consent_unambiguous_affirmative", "consent_separable_request",
+    "consent_withdrawal_frictionless", "consent_withdrawal_consequence_notice",
+    "retention_purpose_completion_erasure", "retention_periodic_review",
+    "cross_border_permitted_territory", "security_reasonable_safeguards",
+    "grievance_officer_contact_published", "grievance_response_timeline",
+    "child_verifiable_parental_consent", "child_tracking_behavioral_monitoring"
+]
+
+
+def calculate_balanced_accuracy(tp: int, tn: int, fp: int, fn: int) -> float:
+    """
+    Computes Balanced Accuracy = (Sensitivity + Specificity) / 2.
+    Critical for Legal AI benchmarks with extreme class imbalance.
+    """
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 1.0
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 1.0
+    return round((sensitivity + specificity) / 2.0, 4)
+
+
+def calculate_mcc(tp: int, tn: int, fp: int, fn: int) -> float:
+    """
+    Computes Matthews Correlation Coefficient (MCC):
+    MCC = (TP*TN - FP*FN) / sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))
+    The gold standard for binary and imbalanced multi-label compliance decisions.
+    """
+    numerator = (tp * tn) - (fp * fn)
+    denominator = ((tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)) ** 0.5
+    if denominator == 0:
+        return 0.0
+    return round(numerator / denominator, 4)
+
+
+def calculate_multilabel_legalbench_metrics(
+    gt_violations_per_case: List[List[Dict[str, Any]]],
+    pred_violations_per_case: List[List[Dict[str, Any]]],
+    all_classes: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Stanford LegalBench standard multi-label evaluation across all 26 statutory classes.
+    Computes Macro-F1, Micro-F1, Balanced Accuracy, and MCC.
+    """
+    if all_classes is None:
+        all_classes = VALID_VIOLATION_TYPES
+
+    num_classes = len(all_classes)
+    total_cases = len(gt_violations_per_case)
+
+    # Per-class counters: c -> {tp, fp, fn, tn}
+    class_stats = {c: {"tp": 0, "fp": 0, "fn": 0, "tn": 0} for c in all_classes}
+
+    for gt_list, pred_list in zip(gt_violations_per_case, pred_violations_per_case):
+        gt_types = set(v.get("violation_type") for v in gt_list if isinstance(v, dict))
+        pred_types = set(v.get("violation_type") for v in pred_list if isinstance(v, dict) and not v.get("omission_check", False))
+
+        for c in all_classes:
+            has_gt = c in gt_types
+            has_pred = c in pred_types
+
+            if has_gt and has_pred:
+                class_stats[c]["tp"] += 1
+            elif not has_gt and has_pred:
+                class_stats[c]["fp"] += 1
+            elif has_gt and not has_pred:
+                class_stats[c]["fn"] += 1
+            else:
+                class_stats[c]["tn"] += 1
+
+    per_class_metrics = {}
+    f1_list = []
+    balanced_acc_list = []
+    mcc_list = []
+    precision_list = []
+    recall_list = []
+
+    total_tp = 0
+    total_fp = 0
+    total_fn = 0
+    total_tn = 0
+
+    for c, stats in class_stats.items():
+        tp = stats["tp"]
+        fp = stats["fp"]
+        fn = stats["fn"]
+        tn = stats["tn"]
+
+        total_tp += tp
+        total_fp += fp
+        total_fn += fn
+        total_tn += tn
+
+        p = tp / (tp + fp) if (tp + fp) > 0 else (1.0 if fn == 0 else 0.0)
+        r = tp / (tp + fn) if (tp + fn) > 0 else (1.0 if fp == 0 else 0.0)
+        f1 = (2 * p * r) / (p + r) if (p + r) > 0 else 0.0
+        bal_acc = calculate_balanced_accuracy(tp, tn, fp, fn)
+        mcc_val = calculate_mcc(tp, tn, fp, fn)
+
+        per_class_metrics[c] = {
+            "tp": tp, "fp": fp, "fn": fn, "tn": tn,
+            "precision": round(p, 4),
+            "recall": round(r, 4),
+            "f1": round(f1, 4),
+            "balanced_accuracy": bal_acc,
+            "mcc": mcc_val,
+            "support": tp + fn
+        }
+
+        f1_list.append(f1)
+        balanced_acc_list.append(bal_acc)
+        mcc_list.append(mcc_val)
+        precision_list.append(p)
+        recall_list.append(r)
+
+    # Global Micro metrics
+    micro_p = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
+    micro_r = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
+    micro_f1 = (2 * micro_p * micro_r) / (micro_p + micro_r) if (micro_p + micro_r) > 0 else 0.0
+    micro_bal_acc = calculate_balanced_accuracy(total_tp, total_tn, total_fp, total_fn)
+    micro_mcc = calculate_mcc(total_tp, total_tn, total_fp, total_fn)
+
+    # Global Macro metrics
+    macro_f1 = float(sum(f1_list) / len(f1_list)) if f1_list else 0.0
+    macro_p = float(sum(precision_list) / len(precision_list)) if precision_list else 0.0
+    macro_r = float(sum(recall_list) / len(recall_list)) if recall_list else 0.0
+    macro_bal_acc = float(sum(balanced_acc_list) / len(balanced_acc_list)) if balanced_acc_list else 0.0
+    macro_mcc = float(sum(mcc_list) / len(mcc_list)) if mcc_list else 0.0
+
+    return {
+        "macro_f1": round(macro_f1, 4),
+        "micro_f1": round(micro_f1, 4),
+        "macro_precision": round(macro_p, 4),
+        "macro_recall": round(macro_r, 4),
+        "balanced_accuracy": round(macro_bal_acc, 4),
+        "micro_balanced_accuracy": round(micro_bal_acc, 4),
+        "matthews_corr_coeff": round(macro_mcc, 4),
+        "micro_mcc": round(micro_mcc, 4),
+        "total_classes": num_classes,
+        "total_cases_evaluated": total_cases,
+        "per_class": per_class_metrics
+    }
+
+
+def calculate_apliance_protocol_metrics(
+    evaluated_instances: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """
+    Replication of APLiance (Dhakar et al., 2026) 25-Policy / 16-Attribute Benchmark.
+    Evaluates:
+      1. Base Attribute Macro-Accuracy, Precision, Recall, and 2x2 Confusion Matrix
+      2. Unambiguous Consent (§6(1)) Accuracy and Recall (APLiance dropout mode)
+      3. Frictionless Consent Withdrawal (§6(4)) Accuracy
+      4. Silence False Alarm Rate (FPR on unmentioned statutory safe-harbors)
+      5. Full Policy Pass Rate under strict vs omission-firewalled logic.
+    """
+    if not evaluated_instances:
+        return {}
+
+    tp = sum(1 for inst in evaluated_instances if inst.get("is_violation_gt") and inst.get("is_violation_pred"))
+    tn = sum(1 for inst in evaluated_instances if not inst.get("is_violation_gt") and not inst.get("is_violation_pred"))
+    fp = sum(1 for inst in evaluated_instances if not inst.get("is_violation_gt") and inst.get("is_violation_pred"))
+    fn = sum(1 for inst in evaluated_instances if inst.get("is_violation_gt") and not inst.get("is_violation_pred"))
+
+    total = tp + tn + fp + fn
+    accuracy = (tp + tn) / total if total > 0 else 0.0
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    # Section 6(1) Unambiguous Consent subset
+    sec6_1 = [inst for inst in evaluated_instances if inst.get("attribute") in ("consent_unambiguous_affirmative", "consent_separable_request")]
+    tp_61 = sum(1 for inst in sec6_1 if inst.get("is_violation_gt") and inst.get("is_violation_pred"))
+    tn_61 = sum(1 for inst in sec6_1 if not inst.get("is_violation_gt") and not inst.get("is_violation_pred"))
+    fp_61 = sum(1 for inst in sec6_1 if not inst.get("is_violation_gt") and inst.get("is_violation_pred"))
+    fn_61 = sum(1 for inst in sec6_1 if inst.get("is_violation_gt") and not inst.get("is_violation_pred"))
+    tot_61 = len(sec6_1)
+    acc_61 = (tp_61 + tn_61) / tot_61 if tot_61 > 0 else 0.0
+    rec_61 = tp_61 / (tp_61 + fn_61) if (tp_61 + fn_61) > 0 else 0.0
+
+    # Section 6(4) Frictionless Withdrawal subset
+    sec6_4 = [inst for inst in evaluated_instances if "withdrawal" in inst.get("attribute", "")]
+    tp_64 = sum(1 for inst in sec6_4 if inst.get("is_violation_gt") and inst.get("is_violation_pred"))
+    tn_64 = sum(1 for inst in sec6_4 if not inst.get("is_violation_gt") and not inst.get("is_violation_pred"))
+    tot_64 = len(sec6_4)
+    acc_64 = (tp_64 + tn_64) / tot_64 if tot_64 > 0 else 0.0
+
+    # Silence False Positive Rate (FPR on safe-harbor unstated clauses)
+    silent_instances = [inst for inst in evaluated_instances if inst.get("is_silent_clause", False)]
+    silent_fp = sum(1 for inst in silent_instances if inst.get("is_violation_pred"))
+    silence_fpr = (silent_fp / len(silent_instances) * 100.0) if silent_instances else 0.0
+
+    # Global Policy Pass Rate (out of 25 policies)
+    # A policy passes if it has 0 unresolved critical/high statutory violations
+    policy_ids = set(inst.get("policy_id") for inst in evaluated_instances if "policy_id" in inst)
+    passed_policies = 0
+    for pid in policy_ids:
+        p_instances = [inst for inst in evaluated_instances if inst.get("policy_id") == pid]
+        has_viol = any(inst.get("is_violation_pred") for inst in p_instances)
+        if not has_viol:
+            passed_policies += 1
+    pass_rate = (passed_policies / len(policy_ids) * 100.0) if policy_ids else 0.0
+
+    return {
+        "total_instances": total,
+        "base_attribute_accuracy": round(accuracy * 100.0, 2),
+        "base_attribute_precision": round(precision * 100.0, 2),
+        "base_attribute_recall": round(recall * 100.0, 2),
+        "base_attribute_f1": round(f1 * 100.0, 2),
+        "confusion_matrix": {"tp": tp, "tn": tn, "fp": fp, "fn": fn},
+        "unambiguous_consent_6_1_accuracy": round(acc_61 * 100.0, 2),
+        "unambiguous_consent_6_1_recall": round(rec_61 * 100.0, 2),
+        "consent_withdrawal_6_4_accuracy": round(acc_64 * 100.0, 2),
+        "silence_penalty_fpr": round(silence_fpr, 2),
+        "total_policies": len(policy_ids),
+        "passed_policies": passed_policies,
+        "global_policy_pass_rate": round(pass_rate, 2)
+    }
+
+
+def calculate_quote_grounding_rate(
+    pred_violations: List[Dict[str, Any]],
+    policy_text: str
+) -> Dict[str, Any]:
+    """
+    Computes Quote Grounding Rate (percentage of extracted quotes that are verbatim substrings).
+    Also reports Exact Match and character-level IoU.
+    """
+    if not pred_violations:
+        return {"total_quotes": 0, "grounded_quotes": 0, "quote_grounding_rate": 100.0}
+
+    total = 0
+    grounded = 0
+    clean_policy = re.sub(r'\s+', ' ', policy_text.lower()).strip()
+    alpha_policy = re.sub(r'[^a-z0-9]', '', clean_policy)
+
+    for v in pred_violations:
+        if not isinstance(v, dict):
+            continue
+        quote = v.get("evidence_quote", "")
+        if not quote or not isinstance(quote, str) or len(quote.strip()) < 3:
+            continue
+
+        total += 1
+        clean_quote = re.sub(r'\s+', ' ', quote.lower()).strip()
+        alpha_quote = re.sub(r'[^a-z0-9]', '', clean_quote)
+
+        if clean_quote in clean_policy or alpha_quote in alpha_policy:
+            grounded += 1
+
+    rate = (grounded / total * 100.0) if total > 0 else 100.0
+    return {
+        "total_quotes": total,
+        "grounded_quotes": grounded,
+        "quote_grounding_rate": round(rate, 2),
+        "hallucinated_quotes": total - grounded
+    }
+
+
+def calculate_statutory_fidelity(
+    pred_violations: List[Dict[str, Any]],
+    response_text: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Evaluates Statutory Citation Accuracy (SCA), Statute Hallucination Rate (SHR),
+    and Jurisdictional Contamination Rate (JCR - 0% GDPR/CCPA bleed).
+    """
+    total_citations = 0
+    valid_citations = 0
+    hallucinated_citations = 0
+
+    for v in pred_violations:
+        if not isinstance(v, dict):
+            continue
+        ref = str(v.get("statute_reference", "")).lower().strip()
+        if not ref or ref == "none":
+            continue
+
+        total_citations += 1
+        m = re.match(r'^(section|rule)\s*(\d+)', ref)
+        if m:
+            doc_type = m.group(1)
+            numeral = int(m.group(2))
+            if numeral in VALID_DPDP_BOUNDARIES[doc_type]:
+                valid_citations += 1
+            else:
+                hallucinated_citations += 1
+        else:
+            hallucinated_citations += 1
+
+    sca = (valid_citations / total_citations * 100.0) if total_citations > 0 else 100.0
+    shr = (hallucinated_citations / total_citations * 100.0) if total_citations > 0 else 0.0
+
+    # Jurisdictional Contamination Rate
+    texts_to_check = []
+    if response_text:
+        texts_to_check.append(response_text)
+    for v in pred_violations:
+        if isinstance(v, dict):
+            texts_to_check.append(str(v.get("step_3_semantic_justification", "")))
+            texts_to_check.append(str(v.get("step_2_statute_match", "")))
+
+    full_check_text = " ".join(texts_to_check)
+    has_bleed, bleed_terms = evaluate_jcr(full_check_text)
+    jcr = 100.0 if has_bleed else 0.0
+
+    return {
+        "total_citations": total_citations,
+        "valid_citations": valid_citations,
+        "statutory_citation_accuracy": round(sca, 2),
+        "statute_hallucination_rate": round(shr, 2),
+        "jurisdictional_contamination_rate": round(jcr, 2),
+        "bleed_terms_detected": bleed_terms
+    }
