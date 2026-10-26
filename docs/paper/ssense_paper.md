@@ -949,6 +949,17 @@ Table XXIV demonstrates that high-precision, zero-hallucination compliance verif
 
 **Fig. 13B. Measured sovereign workstation edge execution profile on an NVIDIA GeForce RTX 3060 (12 GB GDDR6 VRAM) with host RAM offloading: (a) dynamic layer allocation (21 GPU VRAM layers vs. 11 host RAM layers) and peak memory budgeting (11.04 GiB resident weights + KV headroom); (b) measured end-to-end audit latency across disparate policy lengths (from 490 to 16,000 tokens), achieving a median 34.2s audit turnaround and $<4.5$ ms cache hits with 0 bytes of cloud telemetry egress.**
 
+*Real-World Client Integration & Citizen Interface:*
+To bridge the gap between theoretical statutory formalization and practical citizen protection, Ssense couples the local inference daemon with a lightweight, Manifest V3-compliant browser extension (Fig. 13C). When a user navigates to a commercial web service, the client transparently retrieves the domain's public privacy declaration, verifies local cache freshness, or dispatches an asynchronous audit request to the sovereign SLM container via loopback HMAC-SHA256 authenticated channels. As illustrated in Fig. 13C, the client exposes four primary operational surfaces:
+1. *Live Audit Popup (a):* Delivers an instantaneous compliance trust score (e.g., 82/100 for `zomato.com`), categorizing identified statutory risks into actionable severity tiers alongside verbatim clause excerpts and governing DPDP sections.
+2. *Ssense Co-Pilot Sidepanel (b):* An interactive legal dialogue assistant grounded in RAG retrieval that answers natural-language queries regarding data retention, third-party disclosures, or consent withdrawal procedures with zero statutory hallucination.
+3. *Sovereign Privacy Controls (c):* Enables granular end-user configuration over automated background scanning, cache TTL management (default 7 days), domain whitelist/bypass lists, and direct connection parameters to local versus private enterprise SLM nodes.
+4. *Citizen Onboarding Shield (d):* A pedagogical onboarding interface educating Indian data principals on their fundamental statutory rights under the DPDP Act, 2023.
+
+![Fig. 13C. Ssense Browser Extension Client Architecture and Real-World User Interface](../../fig17_extension_multipanel_live.png)
+
+**Fig. 13C. Ssense browser extension client architecture and real-world user interface: (a) live audit popup evaluating commercial web policies (e.g., zomato.com) yielding real-time DPDP compliance scores and actionable statutory violation findings; (b) Ssense Co-Pilot sidepanel delivering interactive, citation-grounded conversational legal dialogue; (c) sovereign user settings and privacy configuration panel managing localized scanning rules, domain bypass lists, and local SLM inference endpoints; (d) citizen onboarding workflow educating users on statutory rights under India's DPDP Act, 2023; and (e) measured sovereign edge telemetry verifying 100% offline local inference on an NVIDIA GeForce RTX 3060 with zero cloud data egress.**
+
 ## K. Summary of Empirical Findings
 
 The empirical evaluation establishes four fundamental findings:
