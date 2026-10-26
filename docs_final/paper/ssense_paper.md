@@ -331,6 +331,8 @@ A plainly worded breach (e.g., "We sell your data to advertisers") yields a low 
 Ssense is architected as an automated regulatory verification system structured into four core components: (i) an asynchronous statutory extraction and policy normalization engine; (ii) a domain-adapted Legal SLM (`Ssense-DPDP-7B`) operating over statutory deontic logic; (iii) a deterministic Statutory Compliance Layer (SCL) serving as a neuro-symbolic backstop; and (iv) a high-throughput, multi-tier inference serving architecture leveraging continuous batching, PagedAttention, and speculative decoding for low-latency web auditing. The system ingests raw web policy documents, evaluates them against the 26-node statutory decision tree, and emits schema-bound, cryptographically auditable JSON compliance verdicts. Fig. 1 illustrates the end-to-end architecture and Fig. 2 the training and alignment pipeline.
 
 
+![Fig. 1. End-to-end architecture of Ssense](figures/fig1_overall_architecture.png)
+
 **Fig. 1. End-to-end architecture of Ssense: from raw web policy ingestion to scalable Law-LM inference and downstream compliance reporting.**
 
 
@@ -363,6 +365,8 @@ with $\beta = 2.0$ for the auditor to strictly enforce schema-bound statutory fa
 *Open-Weights Release (`Ssense-DPDP-7B`):* Following training, the rsLoRA adapter weights were merged into the base Transformer parameters to produce a unified, standalone, open-weights statutory language model (`Ssense-DPDP-7B`, safetensors BF16). While the model can also be quantized (e.g., GGUF Q4_K_M for offline local execution via llama.cpp), our primary design target is high-throughput centralized and distributed serving capable of handling global auditing traffic at scale. Table VIII summarizes the model specifications.
 
 
+![Fig. 2. Training and alignment pipeline](figures/fig2_training_alignment_pipeline.png)
+
 **Fig. 2. Training and alignment pipeline: Data Forge synthesis, SFT, SimPO preference alignment, and merged open-weights export.**
 
 
@@ -388,6 +392,8 @@ The auditor emits a structured JSON object containing four mandatory fields: leg
 *The Omission Firewall:* If a candidate finding derives from silence rather than an affirmative statement on a conditional prohibition, the binary flag `omission_check = True` is set. The inference engine mechanically purges all findings where `omission_check = True` prior to emitting the report (Fig. 3).
 
 
+![Fig. 3. Three-step deductive reasoning chain and omission firewall](figures/fig3_three_step_deductive_chain.png)
+
 **Fig. 3. Three-step deductive reasoning chain and the omission firewall dropping silence-derived candidate findings.**
 
 
@@ -408,6 +414,8 @@ The expected execution cost per incoming audit request follows:
 $$\mathbb{E}[\text{Cost}] = t_{\text{mem}} + (1 - h_{\text{mem}}) \left[ t_{\text{db}} + (1 - h_{\text{db}}) \left[ t_{\text{hash}} + (1 - h_{\text{hash}}) t_{\text{SLM}} \right] \right]$$
 where $h_k$ is the hit rate and $t_k$ the latency of tier $k$.
 
+
+![Fig. 4. Multi-tier hierarchical caching and request coalescing pipeline](figures/fig4_audit_request_cache_pipeline.png)
 
 **Fig. 4. Multi-tier hierarchical caching and request coalescing pipeline for scalable Law-LM serving.**
 
@@ -432,7 +440,11 @@ To transition statutory compliance verification from slow, offline analysis to r
 
 *Prompt KV Cache Pre-Warming:* The system prompt containing core DPDP statutory definitions, deontic rules, and schema instructions is invariant across audit requests. Using the Prompt Cache paradigm [50], prefill Key-Value states ($\mathcal{K}, \mathcal{V}$) for this 1,200-token prefix are pre-computed and held resident in GPU memory, reducing prompt prefill latency to $<15\text{ ms}$.
 
-*Speculative Prompt Lookup Decoding:* Auditing legal contracts inherently involves substantial $n$-gram lexical overlap between the extracted policy clauses, retrieved statutory provisions, and generated reasoning traces. Rather than generating every token autoregressively, Ssense implements speculative prompt lookup decoding [51] ($k=3$): matching $n$-grams from the prompt context are speculatively proposed as candidate continuation tokens and verified simultaneously in a single Transformer forward pass. This delivers a $1.8\times$ decoding speedup without requiring an auxiliary draft model.
+*Speculative Prompt Lookup Decoding:* Auditing legal contracts inherently involves substantial $n$-gram lexical overlap between the extracted policy clauses, retrieved statutory provisions, and generated reasoning traces. Rather than generating every token autoregressively, Ssense implements speculative prompt lookup decoding [51] ($k=3$): matching $n$-grams from the prompt context are speculatively proposed as candidate continuation tokens and verified simultaneously in a single Transformer forward pass. This delivers a $1.8\times$ decoding speedup without requiring an auxiliary draft model (Fig. 4B).
+
+![Fig. 4B. High-Throughput Inference Serving Telemetry and Prompt Lookup Decoding](figures/fig23_system_throughput_and_scaling.png)
+
+**Fig. 4B. High-throughput inference serving telemetry: (a) aggregate token generation throughput (tok/s) across continuous batch sizes $B \in \{1, 4, 8, 16\}$ comparing PagedAttention with prompt KV pre-warming against standard HuggingFace pipelines; (b) speculative prompt lookup decoding speedup ($k \in \{1, 2, 3, 4\}$) exploiting high lexical and statutory $n$-gram redundancy across legal policies.**
 
 ## H. Statutory Severity Classification and Regulatory Risk Tiers
 
@@ -690,6 +702,10 @@ Across the 10 audited platforms, Ssense confirmed exactly three actionable statu
 
 **Fig. 6. Empirical statutory audit scores across strategic Indian fiduciaries ($>500\text{M}$ MAU) and confirmed legal phenotypes.**
 
+![Fig. 6B. Statutory Compliance Category Profiles Across 6 Strategic Indian Platforms](figures/fig22_live_audit_case_study_breakdown.png)
+
+**Fig. 6B. Granular statutory compliance breakdown across six strategic Indian platforms (>500M MAU) across six statutory dimensions: Notice (§5), Unbundled Consent (§6(1)), Easy Withdrawal (§6(4)), Retention Limits (§8(7)), Minor Protection (§9), and Indian DPO (§13).**
+
 ## B. Comparative Benchmarking against SOTA Baselines
 
 To benchmark `Ssense-DPDP-7B` against prior art with maximum scientific rigor, we evaluate performance across two standardized corpora:
@@ -789,6 +805,10 @@ To directly evaluate statutory coverage against APLiance's 16 attributes, Table 
 ![Fig. 8. Per-provision statutory classification performance across DPDP clusters](../../fig6_statutory_taxonomy_f1_breakdown.png)
 
 **Fig. 8. Per-provision statutory classification performance across DPDP clusters comparing `Ssense-DPDP-7B` beside APLiance [3], commercial LLMs, and foundation base.**
+
+![Fig. 8B. Cross-Jurisdictional Bleed and Section 7 Grounding](figures/fig21_dpdp_vs_gdpr_jurisdiction_isolation.png)
+
+**Fig. 8B. Cross-jurisdictional bleed and statutory grounding on Section 7 closed legitimate uses: (a) measured cross-jurisdictional bleed rate (JCR %) superimposing foreign legal doctrines (GDPR Art. 6(1)(f)) across baseline models versus Ssense (0.0% zero-bleed); (b) precision and recall on Section 7 legitimate uses preventing commercial tracking from masquerading as statutory safe harbors.**
 
 ## D. Deontic Modality Reasoning & Confusion Analysis
 
