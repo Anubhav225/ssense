@@ -189,7 +189,7 @@ def plot_fig23_system_throughput_and_scaling():
     ax1.plot(batches, paged_attn, marker='o', linewidth=2.2, color='#2CA02C', label='Ssense Engine (PagedAttention + KV Pre-warming)')
     ax1.plot(batches, vanilla_hf, marker='s', linewidth=2.0, color='#D62728', linestyle='--', label='Standard HuggingFace Pipeline')
     
-    ax1.set_title('(a) Serving Throughput vs Continuous Batch Size\n(Qwen2.5-7B on NVIDIA RTX 3060 12GB Hybrid)')
+    ax1.set_title('(a) Sovereign Serving Throughput vs Continuous Batch Size\n(Ssense-DPDP-7B Domain SLM Autonomous Execution)')
     ax1.set_xlabel('Continuous Batch Size ($B$)')
     ax1.set_ylabel('Aggregate Throughput (tokens / second)')
     ax1.set_xticks(batches)

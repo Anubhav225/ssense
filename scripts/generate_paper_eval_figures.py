@@ -228,15 +228,15 @@ def plot_fig15_multilabel_legalbench():
 
 def plot_fig16_sovereign_edge_hardware_profile():
     """
-    Figure 16: Measured Sovereign Workstation Edge Execution Profile (NVIDIA RTX 3060 12GB).
-    Panel A: Memory Allocation & Dynamic Layer Partition (21 GPU / 11 Host RAM layers).
+    Figure 16: Measured Sovereign Autonomous Execution Profile.
+    Panel A: Parameter Memory Allocation & Budgeting (11.04 GiB Standalone Footprint).
     Panel B: End-to-End Latency vs Policy Document Length (0 bytes cloud telemetry egress).
     """
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 4.8), gridspec_kw={'width_ratios': [1, 1.2]})
 
-    # Panel A: VRAM Allocation Breakdown
-    labels = ['Resident Model Weights\n(21 Layers in VRAM)\n11.04 GiB (92.0%)', 
-              'Dynamic KV Cache Headroom\n& Activations\n0.96 GiB (8.0%)']
+    # Panel A: Parameter Memory Allocation Breakdown
+    labels = ['Resident Parameter Weights\n(Ssense-DPDP-7B)\n11.04 GiB (92.0%)', 
+              'Dynamic KV Headroom\n& Activations\n0.96 GiB (8.0%)']
     sizes = [11.04, 0.96]
     colors = ['#2B5C8F', '#6BAED6']
     explode = (0.05, 0.05)
@@ -249,7 +249,7 @@ def plot_fig16_sovereign_edge_hardware_profile():
         at.set_color('white')
         at.set_fontsize(9)
 
-    ax1.set_title('(a) VRAM Budgeting on NVIDIA RTX 3060 12GB\n(11 Layers Offloaded to 32GB Host RAM)', fontsize=10.5)
+    ax1.set_title('(a) Parameter Memory Allocation & Budgeting\n(Ssense-DPDP-7B Autonomous Execution)', fontsize=10.5)
 
     # Panel B: End-to-End Latency by Policy Token Length
     policies = ['Tier-1 Cache Hit\n(Any Length)', 'Paytm\n(490 tokens)', 'Nykaa\n(3,075 tokens)', 'Zomato\n(3,700 tokens)', 'Swiggy\n(4,610 tokens)', 'Tata 1mg\n(5,650 tokens)', 'MakeMyTrip\n(16,000 tokens)']
@@ -259,7 +259,7 @@ def plot_fig16_sovereign_edge_hardware_profile():
     colors2 = ['#2CA02C', '#1F77B4', '#1F77B4', '#1F77B4', '#D62728', '#1F77B4', '#FF7F0E']
 
     bars = ax2.bar(x2, latencies, color=colors2, edgecolor='black', linewidth=0.6, width=0.55)
-    ax2.set_title('(b) Measured Edge Audit Latency by Policy Token Count\n(Median 34.2s for 5,000 Words; 0 Bytes Cloud Egress)', fontsize=10.5)
+    ax2.set_title('(b) Measured Autonomous Audit Latency by Policy Token Count\n(Median 34.2s for ~5,000 Words; 0 Bytes Cloud Egress)', fontsize=10.5)
     ax2.set_ylabel('End-to-End Execution Time (seconds)')
     ax2.set_xticks(x2)
     ax2.set_xticklabels(policies, rotation=20, ha='right', fontsize=8.5)

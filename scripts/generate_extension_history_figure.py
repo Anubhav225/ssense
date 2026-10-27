@@ -228,7 +228,7 @@ def generate_figure_24():
     kpis = [
         ("Audit Precision", "100.0%", "Zero false positives on statutory labels", (46, 204, 113)),
         ("Hallucination Rate", "0.00%", "Rigorous XGrammar constrained decoding", (0, 215, 165)),
-        ("Edge VRAM Peak", "11.04 GiB", "GeForce RTX 3060 local workstation", (52, 152, 219)),
+        ("Active Memory Bound", "11.04 GiB", "Autonomous 7B Parameter Footprint", (52, 152, 219)),
         ("Cloud Data Egress", "0 Bytes", "100% sovereign offline privacy", (46, 204, 113)),
     ]
 

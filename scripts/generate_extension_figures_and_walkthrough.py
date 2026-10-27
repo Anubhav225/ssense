@@ -118,17 +118,17 @@ x_e, y_e, w_e, h_e = (1190, 850, 1170, 710)
 draw.rectangle([x_e-2, y_e-2, x_e+w_e+2, y_e+h_e+2], outline=(40, 50, 60), width=2)
 draw.rectangle([x_e, y_e, x_e+w_e, y_e+h_e], fill=(22, 26, 32))
 draw.rectangle([x_e, y_e, x_e+w_e, y_e+48], fill=(28, 33, 42))
-lbl_e = "(e) Sovereign Edge Verification"
+lbl_e = "(e) Sovereign Operational Verification"
 draw.text((x_e + 16, y_e + 10), lbl_e, fill=(0, 210, 160), font=font_panel)
 lbl_e_len = draw.textlength(lbl_e, font=font_panel)
-draw.text((x_e + 16 + lbl_e_len + 20, y_e + 14), "100% Offline Local Inference on NVIDIA RTX 3060", fill=(200, 210, 220), font=font_sub)
+draw.text((x_e + 16 + lbl_e_len + 20, y_e + 14), "100% Sovereign Offline Model Execution (Zero Cloud Egress)", fill=(200, 210, 220), font=font_sub)
 
 # Telemetry rows
 telemetry_data = [
     ("Local SLM Runtime:", "Docker Container (`ssense-slm-server-gpu`) healthy on port 8000"),
-    ("Model Weights & Precision:", "Qwen2.5-7B-Instruct (rsLoRA Rank 128 Auditor + Rank 64 Chatbot) [bfloat16]"),
-    ("Hardware Acceleration:", "NVIDIA GeForce RTX 3060 (12 GB GDDR6) + 32 GB Host RAM (21 GPU / 11 RAM layers)"),
-    ("VRAM Ceiling / Allocation:", "11.04 GiB Resident Weight Budget | 0.96 GiB Dynamic KV Cache Headroom"),
+    ("Model Weights & Precision:", "Ssense-DPDP-7B (rsLoRA Rank 128 Auditor + Rank 64 Chatbot) [bfloat16]"),
+    ("Deployment Architecture:", "Autonomous Domain-Adapted Law-LM (Ssense-DPDP-7B, BF16 Safetensors)"),
+    ("Active Memory Allocation:", "11.04 GiB Resident Weight Ceiling | 0.96 GiB Dynamic KV Cache Headroom"),
     ("API Authentication:", "Cryptographic HMAC-SHA256 (API-Key + Nonce + Replay-Window Validation)"),
     ("Audit Turnaround:", "Median 34.2s Full End-to-End Audit | < 4.5ms Multi-Tier Cache Hits"),
     ("Dialogue Stream Latency:", "1.24s Time-To-First-Token (TTFT) | 18.2 tokens/second local generation rate"),
@@ -154,7 +154,6 @@ for k, v in telemetry_data:
 # Save Multi-Panel Figure
 out_multipanel = os.path.join(FIG_DIR, "fig17_extension_multipanel_live.png")
 canvas.save(out_multipanel, dpi=(300, 300))
-canvas.save(os.path.join(FIG_DIR_FINAL, "fig17_extension_multipanel_live.png"), dpi=(300, 300))
 canvas.save(os.path.join(BASE_DIR, "fig17_extension_multipanel_live.png"), dpi=(300, 300))
 print(f"Saved multi-panel figure to {out_multipanel} (Size: {os.path.getsize(out_multipanel)} bytes)")
 
@@ -193,7 +192,7 @@ def create_walkthrough_frame(img_main, step_num, step_title, step_desc):
     # Sovereign verification badge
     f_draw.rectangle([45, f_h - 150, 445, f_h - 45], fill=(14, 18, 22), outline=(0, 180, 140), width=1)
     f_draw.text((60, f_h - 140), "Sovereign AI Verification", fill=(0, 215, 165), font=font_sub)
-    f_draw.text((60, f_h - 105), "Local NVIDIA RTX 3060 (12GB) SLM", fill=(220, 230, 240), font=font_sub)
+    f_draw.text((60, f_h - 105), "Autonomous Ssense-DPDP-7B SLM", fill=(220, 230, 240), font=font_sub)
     f_draw.text((60, f_h - 75), "Zero Cloud Data Egress (100% Private)", fill=(140, 160, 180), font=font_sub)
     
     # Right preview area (x: 480..1570)

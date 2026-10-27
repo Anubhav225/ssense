@@ -121,6 +121,10 @@ powershell.bat
 apps/slm-server/.nv/
 scratch/
 
+# Generated PDF & rendered paper artifacts
+*.pdf
+*.html
+
 # Generated figure dumps and bundle staging in repo root
 /fig*.png
 /fig*.svg
