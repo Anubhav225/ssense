@@ -20,10 +20,16 @@ os.makedirs(FIG_DIR, exist_ok=True)
 os.makedirs(FIG_DIR_FINAL, exist_ok=True)
 
 # 1. Load Live Screenshot Images
-img_popup = Image.open(os.path.join(BASE_DIR, "fig_extension_popup_live.png")).convert("RGB")
-img_options = Image.open(os.path.join(BASE_DIR, "fig_extension_options_live.png")).convert("RGB")
-img_welcome = Image.open(os.path.join(BASE_DIR, "fig_extension_welcome_live.png")).convert("RGB")
-img_sidepanel = Image.open(os.path.join(BASE_DIR, "fig_extension_sidepanel_live.png")).convert("RGB")
+def _find_img(name):
+    p = os.path.join(FIG_DIR, name)
+    if os.path.exists(p):
+        return p
+    return os.path.join(BASE_DIR, name)
+
+img_popup = Image.open(_find_img("fig_extension_popup_live.png")).convert("RGB")
+img_options = Image.open(_find_img("fig_extension_options_live.png")).convert("RGB")
+img_welcome = Image.open(_find_img("fig_extension_welcome_live.png")).convert("RGB")
+img_sidepanel = Image.open(_find_img("fig_extension_sidepanel_live.png")).convert("RGB")
 
 print(f"Loaded: popup={img_popup.size}, options={img_options.size}, welcome={img_welcome.size}, sidepanel={img_sidepanel.size}")
 
@@ -246,8 +252,6 @@ out_gif = os.path.join(FIG_DIR, "ssense_extension_walkthrough.gif")
 # Duration in milliseconds per frame: 3500ms (3.5 seconds)
 frames[0].save(out_webp, save_all=True, append_images=frames[1:], duration=3500, loop=0)
 frames[0].save(out_gif, save_all=True, append_images=frames[1:], duration=3500, loop=0)
-frames[0].save(os.path.join(BASE_DIR, "ssense_extension_walkthrough.webp"), save_all=True, append_images=frames[1:], duration=3500, loop=0)
-frames[0].save(os.path.join(BASE_DIR, "ssense_extension_walkthrough.gif"), save_all=True, append_images=frames[1:], duration=3500, loop=0)
 frames[0].save(os.path.join(FIG_DIR_FINAL, "ssense_extension_walkthrough.webp"), save_all=True, append_images=frames[1:], duration=3500, loop=0)
 frames[0].save(os.path.join(FIG_DIR_FINAL, "ssense_extension_walkthrough.gif"), save_all=True, append_images=frames[1:], duration=3500, loop=0)
 

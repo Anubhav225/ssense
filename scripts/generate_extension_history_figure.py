@@ -29,7 +29,6 @@ import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_DIRS = [
-    PROJECT_ROOT,
     PROJECT_ROOT / "docs" / "paper" / "figures",
     PROJECT_ROOT / "docs_final" / "paper" / "figures",
 ]

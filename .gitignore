@@ -116,13 +116,20 @@ docker_logs*.txt
 powershell.bat
 .patch-round*/
 *.zip
-!ssense_final_paperieee.zip
-!my_ssense_ss.zip
-!ml_eval.zip
 *.7z
 .nv/
 apps/slm-server/.nv/
 scratch/
+
+# Generated figure dumps and bundle staging in repo root
+/fig*.png
+/fig*.svg
+/fig_extension_*.png
+/ssense_extension_walkthrough.*
+/ssense_paper_figures_and_results/
+/paper_assets/
+/ssense_final_paperieee/
+/eval_results/
 
 # ------------------------------------------------------------------------------
 # Academic Research & Paper Draft Materials (Kept local, excluded from repo)

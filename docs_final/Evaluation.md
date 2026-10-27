@@ -112,15 +112,15 @@ graph TB
 
 ## 6. Project Media & Data References
 
-All publication-grade visual assets and raw evaluation matrices are archived in the root directory:
-- [`fig5_deontic_confusion_matrix.png`](file:///d:/1)MY%20PROJECTS/ssense/fig5_deontic_confusion_matrix.png)
-- [`fig6_statutory_taxonomy_f1_breakdown.png`](file:///d:/1)MY%20PROJECTS/ssense/fig6_statutory_taxonomy_f1_breakdown.png)
-- [`fig7_comparative_radar_benchmark.png`](file:///d:/1)MY%20PROJECTS/ssense/fig7_comparative_radar_benchmark.png)
-- [`fig8_judge_vs_human_reliability.png`](file:///d:/1)MY%20PROJECTS/ssense/fig8_judge_vs_human_reliability.png)
-- [`fig9_omission_firewall_ablation.png`](file:///d:/1)MY%20PROJECTS/ssense/fig9_omission_firewall_ablation.png)
-- [`fig10_fiduciary_audit_landscape.png`](file:///d:/1)MY%20PROJECTS/ssense/fig10_fiduciary_audit_landscape.png)
-- [`fig11_readability_and_cognitive_lift.png`](file:///d:/1)MY%20PROJECTS/ssense/fig11_readability_and_cognitive_lift.png)
-- [`fig12_adversarial_trap_resistance.png`](file:///d:/1)MY%20PROJECTS/ssense/fig12_adversarial_trap_resistance.png)
-- [`evaluation_results_comprehensive.json`](file:///d:/1)MY%20PROJECTS/ssense/evaluation_results_comprehensive.json)
-- [`eval_metrics.csv`](file:///d:/1)MY%20PROJECTS/ssense/eval_metrics.csv)
-- [`EVALUATION_REPORT.md`](file:///d:/1)MY%20PROJECTS/ssense/EVALUATION_REPORT.md)
+All publication-grade visual assets and raw evaluation matrices are maintained within the documentation repository:
+- [`fig5_deontic_confusion_matrix.png`](paper/figures/fig5_deontic_confusion_matrix.png)
+- [`fig6_statutory_taxonomy_f1_breakdown.png`](paper/figures/fig6_statutory_taxonomy_f1_breakdown.png)
+- [`fig7_comparative_radar_benchmark.png`](paper/figures/fig7_comparative_radar_benchmark.png)
+- [`fig8_judge_vs_human_reliability.png`](paper/figures/fig8_judge_vs_human_reliability.png)
+- [`fig9_omission_firewall_ablation.png`](paper/figures/fig9_omission_firewall_ablation.png)
+- [`fig10_fiduciary_audit_landscape.png`](paper/figures/fig10_fiduciary_audit_landscape.png)
+- [`fig11_readability_and_cognitive_lift.png`](paper/figures/fig11_readability_and_cognitive_lift.png)
+- [`fig12_adversarial_trap_resistance.png`](paper/figures/fig12_adversarial_trap_resistance.png)
+- [`evaluation_results_comprehensive.json`](paper/results_data/evaluation_results_comprehensive.json)
+- [`eval_metrics.csv`](paper/results_data/eval_metrics.csv)
+- [`EVALUATION_REPORT.md`](paper/results_data/EVALUATION_REPORT.md)
