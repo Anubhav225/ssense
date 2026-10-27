@@ -35,8 +35,6 @@ STAGING_DIR.mkdir(parents=True, exist_ok=True)
 for f in ["ssense_paper.md", "METHODOLOGY.md", "ssense_equations.md", "eval_final.md", "Evaluation.md"]:
     src = BASE_DIR / "docs" / "paper" / f
     if not src.exists():
-        src = BASE_DIR / "docs_final" / "paper" / f
-    if not src.exists():
         src = BASE_DIR / "docs" / f
     if src.exists():
         shutil.copy2(src, STAGING_DIR / "paper" / f)

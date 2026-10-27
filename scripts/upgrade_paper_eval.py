@@ -141,11 +141,6 @@ Table XXIV demonstrates that high-precision, zero-hallucination compliance verif
         f.write(text)
     print(f"Updated {path} successfully.")
 
-    # Mirror to docs_final/paper/ssense_paper.md
-    with open("docs_final/paper/ssense_paper.md", "w", encoding="utf-8") as f:
-        f.write(text)
-    print("Mirrored to docs_final/paper/ssense_paper.md successfully.")
-
     # Mirror to docs/ssense_paper.md
     with open("docs/ssense_paper.md", "w", encoding="utf-8") as f:
         f.write(text)

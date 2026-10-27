@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 update_paper_with_figures.py – Safely embeds the newly generated evaluation figures
-and harmonizes hardware telemetry parameters in both docs/paper/ssense_paper.md
-and docs_final/paper/ssense_paper.md.
+and harmonizes hardware telemetry parameters in docs/paper/ssense_paper.md.
 """
 
 import sys
@@ -15,8 +14,7 @@ if hasattr(sys.stderr, 'reconfigure'):
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PAPERS = [
-    PROJECT_ROOT / "docs" / "paper" / "ssense_paper.md",
-    PROJECT_ROOT / "docs_final" / "paper" / "ssense_paper.md"
+    PROJECT_ROOT / "docs" / "paper" / "ssense_paper.md"
 ]
 
 FIG_14_SNIPPET = """![Fig. 7A. Direct Head-to-Head Replication of the APLiance DPDP Benchmark](../../fig14_apliance_head_to_head_replication.png)

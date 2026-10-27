@@ -185,7 +185,7 @@ The following publication-grade evaluation charts (300 DPI PNG + SVG) are saved 
 - [`eval_metrics.csv`](file:///d:/1)MY%20PROJECTS/ssense/eval_metrics.csv): Master metric comparison table.
 """
 
-for target in ["docs_final/paper/eval_final.md", "docs/paper/eval_final.md"]:
+for target in ["docs/paper/eval_final.md"]:
     with open(target, "w", encoding="utf-8") as f:
         f.write(content)
     print(f"Updated {target}")

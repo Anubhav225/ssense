@@ -15,9 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 FIG_DIR = os.path.join(BASE_DIR, "docs", "paper", "figures")
-FIG_DIR_FINAL = os.path.join(BASE_DIR, "docs_final", "paper", "figures")
 os.makedirs(FIG_DIR, exist_ok=True)
-os.makedirs(FIG_DIR_FINAL, exist_ok=True)
 
 # 1. Load Live Screenshot Images
 def _find_img(name):
@@ -252,8 +250,6 @@ out_gif = os.path.join(FIG_DIR, "ssense_extension_walkthrough.gif")
 # Duration in milliseconds per frame: 3500ms (3.5 seconds)
 frames[0].save(out_webp, save_all=True, append_images=frames[1:], duration=3500, loop=0)
 frames[0].save(out_gif, save_all=True, append_images=frames[1:], duration=3500, loop=0)
-frames[0].save(os.path.join(FIG_DIR_FINAL, "ssense_extension_walkthrough.webp"), save_all=True, append_images=frames[1:], duration=3500, loop=0)
-frames[0].save(os.path.join(FIG_DIR_FINAL, "ssense_extension_walkthrough.gif"), save_all=True, append_images=frames[1:], duration=3500, loop=0)
 
 print(f"Saved animated WebP to {out_webp} (Size: {os.path.getsize(out_webp)} bytes)")
 print(f"Saved animated GIF to {out_gif} (Size: {os.path.getsize(out_gif)} bytes)")
