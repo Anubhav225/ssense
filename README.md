@@ -123,7 +123,7 @@ Ssense/
 
 The scientific foundations, computational formalizations, and empirical evaluations of Ssense are documented in our research paper:
 
-- **Flagship Research Paper**: [`docs/paper/ssense_paper.md`](docs/paper/ssense_paper.md) — *Ssense: A Domain-Adapted Legal Small Language Model and Scalable Inference Architecture for Auditing Global Web Compliance under India's DPDP Act, 2023 and DPDP Rules, 2025* (IEEE Transactions format, 62 modern references, joint 26-node statutory reduction, dual rsLoRA adapters).
+- **Flagship Research Paper**: [`docs/paper/ssense_paper.md`](docs/paper/ssense_paper.md) — *Ssense: A Domain-Adapted Legal Language Model for Verifiable Statutory Compliance Auditing under India's DPDP Act, 2023* (IEEE Transactions format, 62 modern references, joint 26-node statutory reduction, dual rsLoRA adapters, SimPO alignment).
 - **Master Documentation Index**: [`docs/README.md`](docs/README.md) — Comprehensive guide to all architecture, research groundings, deployment guides, and evaluation harnesses.
 
 ---
