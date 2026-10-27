@@ -117,6 +117,8 @@ powershell.bat
 .patch-round*/
 *.zip
 !ssense_final_paperieee.zip
+!my_ssense_ss.zip
+!ml_eval.zip
 *.7z
 .nv/
 apps/slm-server/.nv/
