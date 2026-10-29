@@ -98,19 +98,33 @@ async function _revalidateInBackground(domain: string, policyUrl: string): Promi
  * On extension startup, pre-warm the top 10 most visited domains from history
  * by fetching their cached server audit if missing or older than 1 day.
  */
+const DEFAULT_TOP_DOMAINS = [
+  'wikipedia.org',
+  'en.wikipedia.org',
+  'google.com',
+  'google.co.in',
+  'amazon.in',
+  'reddit.com',
+  'stackoverflow.com',
+  'github.com',
+  'swiggy.com',
+  'zomato.com',
+  'flipkart.com',
+  'paytm.com',
+];
+
 export async function warmTopDomainCaches(): Promise<void> {
   if (!isOnline()) return;
   try {
-    const history = await historyStore.getAllEntries();
-    if (!history || history.length === 0) return;
-
-    // Pick top 10 by visitCount
-    const topDomains = history
+    const history = await historyStore.getAllEntries().catch(() => []);
+    const visited = (history || [])
       .sort((a, b) => (b.visitCount || 0) - (a.visitCount || 0))
       .slice(0, 10)
       .map(e => e.domain);
 
-    for (const domain of topDomains) {
+    const targetDomains = Array.from(new Set([...visited, ...DEFAULT_TOP_DOMAINS])).slice(0, 15);
+
+    for (const domain of targetDomains) {
       const local = await auditCache.getAudit(domain);
       const isOld = !local || (Date.now() - local.audited_at > 24 * 60 * 60 * 1000);
       if (isOld) {
@@ -125,7 +139,7 @@ export async function warmTopDomainCaches(): Promise<void> {
         }
       }
     }
-    console.log('[OfflineCache] Top domain cache pre-warming completed.');
+    console.log('[OfflineCache] Top domain cache pre-warming completed for', targetDomains.length, 'domains.');
   } catch (err) {
     console.debug('[OfflineCache] Cache warming skipped:', err);
   }

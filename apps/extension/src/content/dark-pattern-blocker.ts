@@ -1,5 +1,6 @@
 // apps/extension/src/content/dark-pattern-blocker.ts
 import type { DpdpAuditReport, NetworkAction, Violation } from '../types/server-protocol';
+import { isFirstPartyDomain } from '../utils/domain';
 
 declare global {
   interface Window {
@@ -24,13 +25,98 @@ window.__ssenseDarkPatternBlockerLoaded = true;
 
 console.log('[Ssense] DOM Enforcer injected and listening.');
 
+let activeStyleElement: HTMLStyleElement | null = null;
+
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'ENFORCE_DPDP_RULES' && message.report) {
     executeNetworkActions(message.report);
+  } else if (message.type === 'DISABLE_DPDP_RULES') {
+    teardownRules();
   } else if (message.type === 'HIGHLIGHT_IN_DOM' && message.quote) {
     highlightAndScrollToQuote(message.quote);
   }
 });
+
+// Bootstrapping: Query background immediately for active shield rules
+try {
+  if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+    chrome.runtime.sendMessage(
+      { type: 'GET_ACTIVE_SHIELD_RULES', domain: window.location.hostname },
+      (res) => {
+        if (chrome.runtime?.lastError) return;
+        if (res?.success && res.report) {
+          executeNetworkActions(res.report);
+        }
+      }
+    );
+  }
+} catch {}
+
+function teardownRules() {
+  if (window.__ssenseActiveObserver) {
+    try { window.__ssenseActiveObserver.disconnect(); } catch {}
+    window.__ssenseActiveObserver = undefined;
+  }
+  window.__ssenseActiveFingerprint = undefined;
+
+  if (activeStyleElement) {
+    try { activeStyleElement.remove(); } catch {}
+    activeStyleElement = null;
+  }
+
+  try {
+    document.querySelectorAll('.ssense-blocked-element').forEach((el) => {
+      el.classList.remove('ssense-blocked-element');
+    });
+    document.querySelectorAll('.ssense-highlight-violation').forEach((el) => {
+      el.classList.remove('ssense-highlight-violation');
+      el.removeAttribute('title');
+    });
+  } catch {}
+
+  document.dispatchEvent(
+    new CustomEvent('__ssense_shield_update__', {
+      detail: {
+        badDomains: [],
+        stripTelemetry: false,
+        spoofHardware: false,
+        injectGPC: false,
+      },
+    })
+  );
+
+  try {
+    const script = document.createElement('script');
+    script.textContent = `window.__ssenseBlockedDomains = []; window.__ssenseStripTelemetry = false;`;
+    (document.head || document.documentElement).appendChild(script);
+    script.remove();
+  } catch {}
+
+  console.log('[Ssense] DPDP Shield stood down for this page.');
+}
+
+function showToastNotice(msg: string) {
+  try {
+    const id = '__ssense_toast_notice';
+    document.getElementById(id)?.remove();
+    const toast = document.createElement('div');
+    toast.id = id;
+    toast.style.cssText = `
+      position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
+      background: #09090b; color: #f4f4f5; padding: 10px 18px; border-radius: 10px;
+      border: 1px solid rgba(6, 182, 212, 0.4); box-shadow: 0 8px 30px rgba(0,0,0,0.6);
+      font-size: 12.5px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-weight: 500; z-index: 2147483647; display: flex; align-items: center; gap: 8px;
+      transition: opacity 0.3s ease; pointer-events: none;
+    `;
+    toast.innerHTML = `<span style="color:#06b6d4;font-weight:700;">Ssense:</span> ${msg}`;
+    (document.body || document.documentElement).appendChild(toast);
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      setTimeout(() => toast.remove(), 400);
+    }, 4500);
+  } catch {}
+}
 
 function highlightAndScrollToQuote(quote: string) {
   try {
@@ -39,9 +125,11 @@ function highlightAndScrollToQuote(quote: string) {
 
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let node: Node | null = null;
+    let found = false;
     while ((node = walker.nextNode())) {
       const text = (node.nodeValue || '').toLowerCase().replace(/\s+/g, ' ');
       if (text.includes(cleanQuote) && node.parentElement) {
+        found = true;
         const el = node.parentElement;
         el.classList.add('ssense-highlight-violation');
         el.style.outline = '3px solid #06B6D4';
@@ -56,8 +144,26 @@ function highlightAndScrollToQuote(quote: string) {
         break;
       }
     }
+    if (!found) {
+      showToastNotice('Notice: Quote belongs to the site’s Privacy Policy and was not found in this active page view.');
+    }
   } catch (err) {
     console.error('[Ssense] Error locating quote in page:', err);
+  }
+}
+
+function matchesBlockedDomain(urlStr: string, badDomains: string[]): boolean {
+  if (!urlStr || !badDomains.length) return false;
+  try {
+    const parsed = new URL(urlStr, window.location.href);
+    const host = parsed.hostname.toLowerCase();
+    return badDomains.some((d) => {
+      const target = d.toLowerCase().trim();
+      return host === target || host.endsWith('.' + target);
+    });
+  } catch {
+    const lower = urlStr.toLowerCase();
+    return badDomains.some((d) => lower.includes(d.toLowerCase()));
   }
 }
 
@@ -85,12 +191,16 @@ function executeNetworkActions(report: DpdpAuditReport) {
   let injectGPC = false;
   let spoofHardware = false;
 
-  // 1. Parse the Rust Daemon's Enforcement Directives
+  // 1. Parse Enforcement Directives, filtering out 1st-party domain from tracker blocking
+  const currentHost = window.location.hostname;
   report.violations.forEach((violation: Violation) => {
     switch (violation.network_action as NetworkAction) {
       case 'BLOCK_THIRD_PARTY':
         if (violation.offending_entities) {
-          badDomains.push(...violation.offending_entities.map(e => e.toLowerCase()));
+          const safeTrackers = violation.offending_entities
+            .map((e) => e.toLowerCase().trim())
+            .filter((e) => e && !isFirstPartyDomain(e, currentHost));
+          badDomains.push(...safeTrackers);
         }
         break;
       case 'WARN_USER_ONLY':
@@ -110,20 +220,35 @@ function executeNetworkActions(report: DpdpAuditReport) {
   });
 
   // Inject CSS rules for instant visual hiding of blocked trackers
-  try {
-    const style = document.createElement('style');
-    style.textContent = `
-      .ssense-blocked-element {
-        display: none !important;
-        opacity: 0 !important;
-        pointer-events: none !important;
-        visibility: hidden !important;
-      }
-    `;
-    (document.head || document.documentElement).appendChild(style);
-  } catch(e) {}
+  if (badDomains.length > 0 && !activeStyleElement) {
+    try {
+      const style = document.createElement('style');
+      style.textContent = `
+        .ssense-blocked-element {
+          display: none !important;
+          opacity: 0 !important;
+          pointer-events: none !important;
+          visibility: hidden !important;
+        }
+      `;
+      (document.head || document.documentElement).appendChild(style);
+      activeStyleElement = style;
+    } catch(e) {}
+  }
 
-  // 🚀 SOTA: Execute MAIN world injections (Bypasses Isolated World limitations)
+  // 🚀 CSP-Safe Synchronization with MAIN world (api-spoof.ts)
+  document.dispatchEvent(
+    new CustomEvent('__ssense_shield_update__', {
+      detail: {
+        badDomains,
+        stripTelemetry: badDomains.length > 0,
+        spoofHardware,
+        injectGPC,
+      },
+    })
+  );
+
+  // Fallback inline script execution for unconstrained contexts
   if (badDomains.length > 0) {
     try {
       const script = document.createElement('script');
@@ -253,7 +378,7 @@ function blockElements(elements: Element[], badDomains: string[]) {
       const tag = el.tagName;
       if (tag === 'IFRAME' || tag === 'SCRIPT' || tag === 'IMG') {
         const src = (el as HTMLIFrameElement | HTMLScriptElement | HTMLImageElement).src;
-        if (src && badDomains.some(domain => src.toLowerCase().includes(domain))) {
+        if (src && matchesBlockedDomain(src, badDomains)) {
           el.classList.add('ssense-blocked-element');
           el.removeAttribute('src');
           if (tag === 'SCRIPT' || tag === 'IFRAME') {

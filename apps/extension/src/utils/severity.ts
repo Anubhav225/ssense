@@ -65,3 +65,14 @@ export function prettyAction(a: string): string {
   };
   return map[a] || (a || '').toLowerCase().replace(/_/g, ' ');
 }
+
+export function actionDescription(a: string): string {
+  const map: Record<string, string> = {
+    BLOCK_THIRD_PARTY: 'Third-party ad and behavioral tracker scripts/iframes are blocked from executing.',
+    WARN_USER_ONLY: 'Statutory non-compliance noted. No automated technical mitigation available; user discretion advised.',
+    STRIP_TELEMETRY_HEADER: 'Diagnostic and tracking headers stripped from outgoing network requests.',
+    INJECT_GPC_SIGNAL: 'Global Privacy Control signal transmitted to opt out of data sharing.',
+    SPOOF_HARDWARE_API: 'Hardware concurrency, WebGL renderer, and Canvas fingerprinting masked.',
+  };
+  return map[a] || 'Automatic privacy protection executed by Ssense DPDP Shield.';
+}

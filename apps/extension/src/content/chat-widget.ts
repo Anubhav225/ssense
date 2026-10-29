@@ -98,12 +98,34 @@ const WIDGET_CSS = `
 `;
 
 const DOMAIN = window.location.hostname;
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === 'PREFS_CHANGED' && msg.prefs) {
+    const host = document.getElementById('ssense-chat-widget-host');
+    if (msg.prefs.showInPageWidget === false) {
+      if (host) host.remove();
+    } else if (msg.prefs.showInPageWidget === true && !host && DOMAIN) {
+      initWidget();
+    }
+  }
+});
+
 if (DOMAIN) {
-  initWidget();
+  chrome.runtime.sendMessage({ type: 'GET_PREFS' })
+    .then((res) => {
+      if (res?.success && res.prefs?.showInPageWidget === false) {
+        console.log('[Ssense] In-page chat widget disabled by user preference.');
+        return;
+      }
+      initWidget();
+    })
+    .catch(() => {
+      initWidget();
+    });
 }
 
-
 function initWidget() {
+  if (document.getElementById('ssense-chat-widget-host')) return;
   const host = document.createElement('div');
   host.id = 'ssense-chat-widget-host';
   // Beat host-page z-index wars; stay out of the page's own layout flow.

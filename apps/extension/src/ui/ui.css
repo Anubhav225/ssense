@@ -264,6 +264,11 @@ body::before {
   color: var(--ssense-accent-amber);
   border: 1px solid rgba(232, 176, 75, 0.3);
 }
+.sx-action-badge--info {
+  background: var(--ssense-info-soft, rgba(14, 165, 233, 0.12));
+  color: var(--ssense-info, #0ea5e9);
+  border: 1px solid rgba(14, 165, 233, 0.3);
+}
 
 /* ── thinking mode reasoning trail ───────────────────────────────────────── */
 .sx-reasoning-trail {

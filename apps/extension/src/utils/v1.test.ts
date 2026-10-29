@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { severityOf, groupBySeverity } from './severity';
+import { severityOf, groupBySeverity, prettyAction, actionDescription } from './severity';
 import { siteStatus, isScannableHost, formatRelative } from './status';
 import { sanitizePrefs, isIgnored, DEFAULT_PREFS } from '../background/prefs';
 import { mergeEntries, type SiteHistoryEntry } from '../background/history-store';
 import { buildRows, summarize } from './rows';
+import { isFirstPartyDomain } from './domain';
 
 const entry = (o: Partial<SiteHistoryEntry> = {}): SiteHistoryEntry => ({
   domain: 'a.com', firstVisit: 100, lastVisit: 200, visitCount: 0, totalTimeMs: 0,
@@ -25,6 +26,50 @@ describe('severity', () => {
     const g = groupBySeverity([{ violation_type: 'CHILD_CONSENT_VIOLATION', network_action: '' }, { violation_type: 'NOTICE_INADEQUATE', network_action: '' }]);
     expect(g.high.length).toBe(1); expect(g.low.length).toBe(1);
   });
+  it('provides human-readable action labels and descriptions', () => {
+    expect(prettyAction('BLOCK_THIRD_PARTY')).toBe('Third-party blocked');
+    expect(prettyAction('WARN_USER_ONLY')).toBe('Warning only');
+    expect(prettyAction('STRIP_TELEMETRY_HEADER')).toBe('Telemetry stripped');
+    expect(prettyAction('INJECT_GPC_SIGNAL')).toBe('GPC signal sent');
+    expect(prettyAction('SPOOF_HARDWARE_API')).toBe('Fingerprinting masked');
+    expect(actionDescription('BLOCK_THIRD_PARTY')).toContain('tracker scripts/iframes are blocked');
+    expect(actionDescription('WARN_USER_ONLY')).toContain('Statutory non-compliance noted');
+  });
+});
+
+describe('isFirstPartyDomain and Fiduciary CDN protection', () => {
+  it('protects exact domain and subdomains', () => {
+    expect(isFirstPartyDomain('swiggy.com', 'swiggy.com')).toBe(true);
+    expect(isFirstPartyDomain('api.swiggy.com', 'swiggy.com')).toBe(true);
+    expect(isFirstPartyDomain('swiggy.com', 'res.swiggy.com')).toBe(true);
+    expect(isFirstPartyDomain('https://checkout.swiggy.com/pay', 'swiggy.com')).toBe(true);
+  });
+
+  it('protects multi-domain fiduciary families (Wikipedia, Amazon, Reddit, Google)', () => {
+    // Wikimedia & Wikipedia
+    expect(isFirstPartyDomain('upload.wikimedia.org', 'en.wikipedia.org')).toBe(true);
+    expect(isFirstPartyDomain('wikimedia.org', 'wikipedia.org')).toBe(true);
+    expect(isFirstPartyDomain('wikidata.org', 'en.wikipedia.org')).toBe(true);
+
+    // Amazon
+    expect(isFirstPartyDomain('media-amazon.com', 'www.amazon.in')).toBe(true);
+    expect(isFirstPartyDomain('ssl-images-amazon.com', 'amazon.com')).toBe(true);
+
+    // Reddit
+    expect(isFirstPartyDomain('redditmedia.com', 'reddit.com')).toBe(true);
+    expect(isFirstPartyDomain('redditstatic.com', 'www.reddit.com')).toBe(true);
+
+    // Google
+    expect(isFirstPartyDomain('gstatic.com', 'google.com')).toBe(true);
+    expect(isFirstPartyDomain('googleapis.com', 'google.co.in')).toBe(true);
+  });
+
+  it('correctly flags genuine 3rd-party ad trackers for blocking', () => {
+    expect(isFirstPartyDomain('doubleclick.net', 'en.wikipedia.org')).toBe(false);
+    expect(isFirstPartyDomain('scorecardresearch.com', 'reddit.com')).toBe(false);
+    expect(isFirstPartyDomain('googletagmanager.com', 'swiggy.com')).toBe(false);
+    expect(isFirstPartyDomain('badtracker.in', 'goodhealth.org')).toBe(false);
+  });
 });
 
 describe('status', () => {
@@ -45,8 +90,9 @@ describe('status', () => {
 
 describe('prefs', () => {
   it('sanitises and clamps', () => {
-    const p = sanitizePrefs({ rescanAfterDays: 9999, lowScoreThreshold: -4, theme: 'neon' as any, ignoredDomains: ['https://WWW.Foo.com/x', 'foo.com', ''] });
+    const p = sanitizePrefs({ rescanAfterDays: 9999, lowScoreThreshold: -4, theme: 'neon' as any, ignoredDomains: ['https://WWW.Foo.com/x', 'foo.com', ''], showInPageWidget: false });
     expect(p.rescanAfterDays).toBe(90); expect(p.lowScoreThreshold).toBe(5); expect(p.theme).toBe('system'); expect(p.ignoredDomains).toEqual(['foo.com']);
+    expect(p.showInPageWidget).toBe(false);
   });
   it('matches ignored subdomains', () => {
     const p = { ...DEFAULT_PREFS, ignoredDomains: ['bank.com'] };

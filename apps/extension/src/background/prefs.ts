@@ -24,6 +24,8 @@ export interface Prefs {
   theme: 'system' | 'light' | 'dark';
   /** Action performed when clicking the extension icon in browser toolbar */
   toolbarAction: 'popup' | 'tab' | 'sidepanel';
+  /** Show the floating AI co-pilot bubble on webpages. */
+  showInPageWidget: boolean;
   _updatedAt: number;
 }
 
@@ -38,6 +40,7 @@ export const DEFAULT_PREFS: Prefs = {
   syncEnabled: true,
   theme: 'system',
   toolbarAction: 'sidepanel',
+  showInPageWidget: true,
   _updatedAt: 0,
 };
 
@@ -62,6 +65,7 @@ export function sanitizePrefs(input: Partial<Prefs> | null | undefined): Prefs {
     syncEnabled: Boolean(p.syncEnabled),
     theme: (['system', 'light', 'dark'] as const).includes(p.theme as any) ? p.theme : 'system',
     toolbarAction: (['popup', 'tab', 'sidepanel'] as const).includes(p.toolbarAction as any) ? p.toolbarAction : 'popup',
+    showInPageWidget: p.showInPageWidget !== undefined ? Boolean(p.showInPageWidget) : DEFAULT_PREFS.showInPageWidget,
     _updatedAt: Number(p._updatedAt) || 0,
   };
 }

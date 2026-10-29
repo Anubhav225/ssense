@@ -30,6 +30,38 @@
     } catch (e) { /* Ignore strict mode/CSP blocks */ }
   };
 
+  // 0. Listen for CSP-compliant Shield Updates from ISOLATED world
+  try {
+    document.addEventListener('__ssense_shield_update__', (event: any) => {
+      const detail = event?.detail;
+      if (!detail) return;
+      if (Array.isArray(detail.badDomains)) {
+        (window as any).__ssenseBlockedDomains = detail.badDomains;
+      }
+      if (typeof detail.stripTelemetry === 'boolean') {
+        (window as any).__ssenseStripTelemetry = detail.stripTelemetry;
+      }
+      if (typeof detail.spoofHardware === 'boolean') {
+        (window as any).__ssenseSpoofHardware = detail.spoofHardware;
+      }
+    });
+  } catch (e) {}
+
+  const matchesBlockedDomain = (urlStr: string, badDomains: string[]): boolean => {
+    if (!urlStr || !badDomains || !badDomains.length) return false;
+    try {
+      const parsed = new URL(urlStr, window.location.href);
+      const host = parsed.hostname.toLowerCase();
+      return badDomains.some((d) => {
+        const target = d.toLowerCase().trim();
+        return host === target || host.endsWith('.' + target);
+      });
+    } catch {
+      const lower = urlStr.toLowerCase();
+      return badDomains.some((d) => lower.includes(d.toLowerCase()));
+    }
+  };
+
   const applySpoofs = (targetWindow: any) => {
     try {
       // 2. Enforce Global Privacy Control (GPC)
@@ -41,30 +73,34 @@
         });
       }
 
-      // 🚀 SOTA FIX: Spoof CPU Core Count (Defeats Hardware Fingerprinting)
+      // 🚀 Hardware Fingerprinting Defenses (Activated conditionally on audit requirement)
       if (targetWindow.Navigator && 'hardwareConcurrency' in targetWindow.Navigator.prototype) {
-        const hwGetter = function hardwareConcurrency() { return 8; }; // Standardize to 8 cores
+        const originalHw = targetWindow.Navigator.prototype.hardwareConcurrency;
+        const hwGetter = function hardwareConcurrency() {
+          return (window as any).__ssenseSpoofHardware ? 8 : (originalHw ?? 8);
+        };
         spoofedFunctions.add(hwGetter);
         Object.defineProperty(targetWindow.Navigator.prototype, 'hardwareConcurrency', {
           get: hwGetter, configurable: false, enumerable: true,
         });
       }
 
-      // 🚀 SOTA FIX: Spoof AudioContext Latency (Defeats Audio Fingerprinting)
       if (targetWindow.AudioContext && targetWindow.AudioContext.prototype) {
-        const latencyGetter = function baseLatency() { return 0.005; };
+        const originalLatency = targetWindow.AudioContext.prototype.baseLatency;
+        const latencyGetter = function baseLatency() {
+          return (window as any).__ssenseSpoofHardware ? 0.005 : (originalLatency ?? 0.005);
+        };
         spoofedFunctions.add(latencyGetter);
         Object.defineProperty(targetWindow.AudioContext.prototype, 'baseLatency', {
           get: latencyGetter, configurable: true, enumerable: true,
         });
       }
 
-      // 🚀 SOTA: Spoof WebGPU Adapter Info (Defeats modern WebGPU tracking primitives)
       if (targetWindow.navigator && 'gpu' in targetWindow.navigator && targetWindow.navigator.gpu) {
         stealthProxy(targetWindow.navigator.gpu, 'requestAdapter', {
           async apply(target, thisArg, args) {
             const adapter = await Reflect.apply(target, thisArg, args);
-            if (adapter && 'requestAdapterInfo' in adapter) {
+            if ((window as any).__ssenseSpoofHardware && adapter && 'requestAdapterInfo' in adapter) {
               stealthProxy(adapter, 'requestAdapterInfo', {
                 async apply() {
                   return { vendor: 'Intel Inc.', architecture: 'Gen12', device: 'Intel Iris OpenGL Engine', description: 'Standard GPU' };
@@ -77,22 +113,27 @@
       }
     } catch (e) {}
 
-    // 3. Spoof WebGL Renderer
+    // 3. Spoof WebGL Renderer (Only when hardware masking is engaged)
     if (targetWindow.WebGLRenderingContext) {
       stealthProxy(targetWindow.WebGLRenderingContext.prototype, 'getParameter', {
         apply(target, thisArg, args) {
-          const parameter = args[0];
-          if (parameter === 37445) return 'Intel Inc.'; 
-          if (parameter === 37446) return 'Intel Iris OpenGL Engine'; 
+          if ((window as any).__ssenseSpoofHardware) {
+            const parameter = args[0];
+            if (parameter === 37445) return 'Intel Inc.'; 
+            if (parameter === 37446) return 'Intel Iris OpenGL Engine'; 
+          }
           return Reflect.apply(target, thisArg, args);
         },
       });
     }
     
-    // 4. Spoof Canvas Fingerprinting
+    // 4. Spoof Canvas Fingerprinting (Only when hardware masking is engaged)
     if (targetWindow.HTMLCanvasElement) {
       stealthProxy(targetWindow.HTMLCanvasElement.prototype, 'toDataURL', {
         apply(target, thisArg, args) {
+          if (!(window as any).__ssenseSpoofHardware) {
+            return Reflect.apply(target, thisArg, args);
+          }
           const type = args[0];
           if (type === 'image/png' || type === 'image/jpeg') {
             try {
@@ -113,7 +154,7 @@
       stealthProxy(targetWindow.CanvasRenderingContext2D.prototype, 'getImageData', {
         apply(target, thisArg, args) {
           const imageData = Reflect.apply(target, thisArg, args);
-          if (imageData && imageData.data && imageData.data.length > 0) {
+          if ((window as any).__ssenseSpoofHardware && imageData && imageData.data && imageData.data.length > 0) {
             imageData.data[0] = imageData.data[0] ^ 1; // Flip LSB of Red channel
           }
           return imageData;
@@ -124,11 +165,54 @@
 
   applySpoofs(window);
 
-  // 5. Defeat the "Clean Room" iframe bypass (Node Hook)
+  // 5. Defeat the "Clean Room" iframe bypass & intercept dynamic tracker script insertions
   if (typeof Node !== 'undefined') {
+    const handleNodeInsertion = (node: Node) => {
+      if (!node) return;
+      const badDomains: string[] = (window as any).__ssenseBlockedDomains || [];
+      const nodeName = node.nodeName;
+
+      if ((nodeName === 'SCRIPT' || nodeName === 'IFRAME') && badDomains.length > 0) {
+        const src = (node as any).src;
+        if (src && matchesBlockedDomain(src, badDomains)) {
+          console.warn(`[Ssense Shield] Blocked dynamic ${nodeName} insertion from tracker: ${src}`);
+          try { (node as any).src = 'about:blank'; } catch {}
+          return false;
+        }
+      }
+
+      if (nodeName === 'IFRAME') {
+        const iframe = node as HTMLIFrameElement;
+        if (iframe.contentWindow) {
+          try { applySpoofs(iframe.contentWindow); } catch (e) {}
+        }
+      }
+      return true;
+    };
+
     stealthProxy(Node.prototype, 'appendChild', {
       apply(target, thisArg, args) {
         const node = args[0] as Node;
+        if (node && handleNodeInsertion(node) === false) {
+          return node; // Return node without inserting into DOM
+        }
+        const result = Reflect.apply(target, thisArg, args);
+        if (node && node.nodeName === 'IFRAME') {
+          const iframe = node as HTMLIFrameElement;
+          if (iframe.contentWindow) {
+            try { applySpoofs(iframe.contentWindow); } catch (e) {}
+          }
+        }
+        return result;
+      }
+    });
+
+    stealthProxy(Node.prototype, 'insertBefore', {
+      apply(target, thisArg, args) {
+        const node = args[0] as Node;
+        if (node && handleNodeInsertion(node) === false) {
+          return node;
+        }
         const result = Reflect.apply(target, thisArg, args);
         if (node && node.nodeName === 'IFRAME') {
           const iframe = node as HTMLIFrameElement;
@@ -166,7 +250,7 @@
         apply(target, thisArg, args) {
           const urlStr = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) ? args[0].url : '';
           const badDomains: string[] = (window as any).__ssenseBlockedDomains || [];
-          if (urlStr && badDomains.some(d => urlStr.toLowerCase().includes(d))) {
+          if (urlStr && matchesBlockedDomain(urlStr, badDomains)) {
             console.warn(`[Ssense Shield] Aborted blocked fetch request: ${urlStr}`);
             return Promise.reject(new TypeError('Failed to fetch (Ssense DPDP Shield Blocked)'));
           }
@@ -185,9 +269,19 @@
         apply(target, thisArg, args) {
           const urlStr = typeof args[1] === 'string' ? args[1] : '';
           const badDomains: string[] = (window as any).__ssenseBlockedDomains || [];
-          if (urlStr && badDomains.some(d => urlStr.toLowerCase().includes(d))) {
+          if (urlStr && matchesBlockedDomain(urlStr, badDomains)) {
             console.warn(`[Ssense Shield] Aborted blocked XHR request: ${urlStr}`);
             (thisArg as any).__ssenseBlocked = true;
+          }
+          return Reflect.apply(target, thisArg, args);
+        }
+      });
+
+      stealthProxy(XMLHttpRequest.prototype, 'setRequestHeader', {
+        apply(target, thisArg, args) {
+          const headerName = typeof args[0] === 'string' ? args[0].toLowerCase() : '';
+          if ((window as any).__ssenseStripTelemetry && ['x-telemetry', 'x-tracker', 'x-analytics', 'x-mixpanel', 'x-client-data'].includes(headerName)) {
+            return; // Drop telemetry tracking header silently
           }
           return Reflect.apply(target, thisArg, args);
         }
@@ -198,6 +292,21 @@
           if ((thisArg as any).__ssenseBlocked) {
             thisArg.dispatchEvent(new Event('error'));
             return;
+          }
+          return Reflect.apply(target, thisArg, args);
+        }
+      });
+    }
+
+    // 8. Intercept navigator.sendBeacon Telemetry
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+      stealthProxy(navigator, 'sendBeacon', {
+        apply(target, thisArg, args) {
+          const urlStr = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) ? args[0].url : '';
+          const badDomains: string[] = (window as any).__ssenseBlockedDomains || [];
+          if (urlStr && matchesBlockedDomain(urlStr, badDomains)) {
+            console.warn(`[Ssense Shield] Aborted blocked sendBeacon telemetry: ${urlStr}`);
+            return true; // Pretend queued successfully so site doesn't retry
           }
           return Reflect.apply(target, thisArg, args);
         }

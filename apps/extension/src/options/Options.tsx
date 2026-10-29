@@ -247,6 +247,7 @@ export default function Options({ onBack }: { onBack?: () => void } = {}) {
             </select>
           </Item>
           <Item title="Scan sites automatically" hint="Audit a site when you open it."><Switch label="Scan automatically" checked={prefs.autoScan} onChange={(v) => set({ autoScan: v })} /></Item>
+          <Item title="On-page AI co-pilot bubble" hint="Display the floating DPDP chat bubble at the bottom-right of websites you visit."><Switch label="Show on-page bubble" checked={prefs.showInPageWidget ?? true} onChange={(v) => set({ showInPageWidget: v })} /></Item>
           <Item title="Re-scan after" hint="Sites audited more recently than this are served instantly from your saved results.">
             <select className="sx-input sx-select" style={{ width: 'auto' }} value={prefs.rescanAfterDays} onChange={(e) => set({ rescanAfterDays: Number(e.target.value) })} aria-label="Re-scan interval">
               {[7, 14, 30, 60, 90].map((d) => <option key={d} value={d}>{d} days</option>)}
@@ -274,7 +275,7 @@ export default function Options({ onBack }: { onBack?: () => void } = {}) {
           <Item title={`Alert below ${prefs.lowScoreThreshold}`} hint="Trust score that counts as risky.">
             <input type="range" min={10} max={90} step={5} value={prefs.lowScoreThreshold} disabled={!prefs.notifyOnLowScore} onChange={(e) => set({ lowScoreThreshold: Number(e.target.value) })} aria-label="Alert threshold" style={{ accentColor: 'var(--ssense-accent)', width: 160 }} />
           </Item>
-          <Item title="Apply recommended protections" hint="Block third-party trackers, send GPC and mask fingerprinting on sites whose audit calls for it."><Switch label="Apply protections" checked={prefs.enforceProtections} onChange={(v) => set({ enforceProtections: v })} /></Item>
+          <Item title="Apply recommended protections" hint="Automatically block third-party trackers, strip telemetry headers, transmit GPC signals, and mask hardware fingerprinting based on DPDP audit findings."><Switch label="Apply protections" checked={prefs.enforceProtections} onChange={(v) => set({ enforceProtections: v })} /></Item>
           <Item title="Score on toolbar icon" hint="Show the trust score as a badge."><Switch label="Toolbar badge" checked={prefs.showBadge} onChange={(v) => set({ showBadge: v })} /></Item>
         </Section>
 

@@ -89,9 +89,19 @@ const Main: React.FC<{
           </div>
         </div>
         {prefs && (
-          <button className="sx-icon-btn" onClick={() => update({ autoScan: !prefs.autoScan })} title={prefs.autoScan ? 'Auto-scan is on — click to pause' : 'Auto-scan is paused — click to resume'} aria-pressed={prefs.autoScan}>
-            <Icon name={prefs.autoScan ? 'scan' : 'pause'} size={16} style={{ color: prefs.autoScan ? 'var(--ssense-accent)' : 'var(--ssense-accent-amber)' }} />
-          </button>
+          <>
+            <button className="sx-icon-btn" onClick={() => update({ autoScan: !prefs.autoScan })} title={prefs.autoScan ? 'Auto-scan is on — click to pause' : 'Auto-scan is paused — click to resume'} aria-pressed={prefs.autoScan}>
+              <Icon name={prefs.autoScan ? 'scan' : 'pause'} size={16} style={{ color: prefs.autoScan ? 'var(--ssense-accent)' : 'var(--ssense-accent-amber)' }} />
+            </button>
+            <button
+              className="sx-icon-btn"
+              onClick={() => update({ enforceProtections: !prefs.enforceProtections })}
+              title={prefs.enforceProtections ? 'Shield protections are ACTIVE (blocking trackers & spoofing) — click to pause' : 'Shield protections are PAUSED — click to resume'}
+              aria-pressed={prefs.enforceProtections}
+            >
+              <Icon name={prefs.enforceProtections ? 'shield' : 'shieldOff'} size={16} style={{ color: prefs.enforceProtections ? 'var(--ssense-accent-emerald)' : 'var(--ssense-accent-rose)' }} />
+            </button>
+          </>
         )}
         <button
           className="sx-btn sx-btn--ghost sx-btn--sm pp-max-btn"
@@ -179,7 +189,7 @@ const Main: React.FC<{
 
       <div className="pp-body sx-scroll" role="tabpanel">
         {tab === 'site'
-          ? <ThisSite host={active.host} rows={rows} loading={loading} autoScan={prefs?.autoScan ?? true} />
+          ? <ThisSite host={active.host} rows={rows} loading={loading} autoScan={prefs?.autoScan ?? true} enforceProtections={prefs?.enforceProtections ?? true} onToggleProtection={() => update({ enforceProtections: !prefs?.enforceProtections })} />
           : <AllSites rows={rows} summary={summary} loading={loading} />}
       </div>
 
@@ -201,7 +211,14 @@ const Main: React.FC<{
 };
 
 // ─── This site ────────────────────────────────────────────────────────────────
-const ThisSite: React.FC<{ host: string | null; rows: SiteRow[]; loading: boolean; autoScan: boolean }> = ({ host, rows, loading, autoScan }) => {
+const ThisSite: React.FC<{
+  host: string | null;
+  rows: SiteRow[];
+  loading: boolean;
+  autoScan: boolean;
+  enforceProtections: boolean;
+  onToggleProtection: () => void;
+}> = ({ host, rows, loading, autoScan, enforceProtections, onToggleProtection }) => {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const norm = host ? normaliseDomain(host) : null;
@@ -241,6 +258,43 @@ const ThisSite: React.FC<{ host: string | null; rows: SiteRow[]; loading: boolea
                   </> : meta.hint}
             </div>
           </div>
+        </div>
+
+        <div style={{
+          padding: '8px 10px',
+          borderRadius: 8,
+          background: 'var(--ssense-bg-elevated)',
+          border: '1px solid var(--ssense-border)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          fontSize: 11.5,
+          gap: 6
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <Icon
+              name={row?.ignored ? 'eyeOff' : enforceProtections ? 'shield' : 'shieldOff'}
+              size={13}
+              style={{ color: row?.ignored ? 'var(--ssense-text-muted)' : enforceProtections ? 'var(--ssense-accent-emerald)' : 'var(--ssense-accent-rose)', flexShrink: 0 }}
+            />
+            <span className="sx-trunc">
+              {row?.ignored
+                ? 'Site bypassed (ignored)'
+                : !enforceProtections
+                ? 'Shield protections paused'
+                : row && row.counts.total > 0
+                ? `${row.counts.total} DPDP directive${row.counts.total === 1 ? '' : 's'} active`
+                : 'Shield active · GPC enabled'}
+            </span>
+          </div>
+          <button
+            className="sx-btn sx-btn--ghost sx-btn--sm"
+            style={{ fontSize: 10.5, padding: '2px 6px', height: 'auto' }}
+            onClick={onToggleProtection}
+            title={enforceProtections ? 'Pause shield protections' : 'Enable shield protections'}
+          >
+            {enforceProtections ? 'Pause' : 'Enable'}
+          </button>
         </div>
 
         {(status === 'error' || status === 'nopolicy') && row?.error && (

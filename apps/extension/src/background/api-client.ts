@@ -180,7 +180,7 @@ function wrap(e: unknown, fb: string): SsenseError {
 }
 
 // ─── Shared fetch helpers ──────────────────────────────────────────────────────
-async function fetchJSON<T>(endpoint: string, method: 'GET'|'POST', body: any, cfg: ServerConfig, retries=2, timeoutMs=120_000): Promise<T> {
+async function fetchJSON<T>(endpoint: string, method: 'GET'|'POST', body: any, cfg: ServerConfig, retries=2, timeoutMs=300_000): Promise<T> {
   if (!navigator.onLine) throw new SsenseError('No internet connection.','network',true);
   const url = `${cfg.url.replace(/\/$/,'')}${endpoint}`;
   for (let i=0; i<=retries; i++) {

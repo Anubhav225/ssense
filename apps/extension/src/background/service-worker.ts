@@ -171,6 +171,15 @@ async function syncTab() {
     await startTracking(d);
   }
   updateActionBadge(d).catch(() => {});
+  if (tab?.id && d) {
+    const prefs = await prefsStore.getPrefs();
+    if (prefs.enforceProtections && !prefsStore.isIgnored(prefs, d)) {
+      const entry = await auditCache.getAudit(d);
+      if (entry) {
+        chrome.tabs.sendMessage(tab.id, { type: 'ENFORCE_DPDP_RULES', report: reportFromCache(entry) }).catch(() => {});
+      }
+    }
+  }
 }
 chrome.tabs.onActivated.addListener(()=>syncTab());
 chrome.tabs.onUpdated.addListener((_,i,t)=>{ if (i.status==='complete'&&t.active) syncTab(); });
@@ -391,6 +400,21 @@ async function handleMessage(msg: any, sender: chrome.runtime.MessageSender): Pr
     // ── Health check ──────────────────────────────────────────────────────
     case 'HEALTH_CHECK': return executeHealthCheck(requestId);
 
+    // ── Get active shield rules for domain (Immediate content script sync) ──
+    case 'GET_ACTIVE_SHIELD_RULES': {
+      const norm = auditCache.normaliseDomain(String(msg.domain || ''));
+      if (!norm) return { success: false, error: 'Missing domain.' };
+      const prefs = await prefsStore.getPrefs();
+      if (!prefs.enforceProtections || prefsStore.isIgnored(prefs, norm)) {
+        return { success: false, reason: 'protections_disabled_or_ignored' };
+      }
+      const entry = await auditCache.getAudit(norm);
+      if (entry) {
+        return { success: true, report: reportFromCache(entry) };
+      }
+      return { success: false, reason: 'not_audited_yet' };
+    }
+
     // ── Audit cache reads (with SWR support) ──────────────────────────────
     case 'GET_LOCAL_AUDIT': {
       const entry=await auditCache.getAudit(String(msg.domain||''));
@@ -536,6 +560,29 @@ async function handleMessage(msg: any, sender: chrome.runtime.MessageSender): Pr
       const prefs = await prefsStore.setPrefs(msg.patch || {});
       if (msg.patch?.toolbarAction) applyToolbarActionConfig().catch(()=>{});
       chrome.runtime.sendMessage({ type:'PREFS_CHANGED', prefs }).catch(()=>{});
+      if (msg.patch?.enforceProtections === false) {
+        chrome.tabs.query({}, (tabs) => {
+          tabs.forEach((t) => {
+            if (t.id && t.url?.startsWith('http')) {
+              chrome.tabs.sendMessage(t.id, { type: 'DISABLE_DPDP_RULES' }).catch(() => {});
+            }
+          });
+        });
+      } else if (msg.patch?.enforceProtections === true) {
+        chrome.tabs.query({}, async (tabs) => {
+          for (const t of tabs) {
+            if (t?.id && t.url?.startsWith('http')) {
+              const d = hostnameOf(t.url);
+              if (d && !prefsStore.isIgnored(prefs, d)) {
+                const entry = await auditCache.getAudit(d);
+                if (entry) {
+                  chrome.tabs.sendMessage(t.id, { type: 'ENFORCE_DPDP_RULES', report: reportFromCache(entry) }).catch(() => {});
+                }
+              }
+            }
+          }
+        });
+      }
       if (prefs.syncEnabled) sync.scheduleSync();
       syncTab().catch(()=>{});
       if (msg.patch?.autoScan === true) scanOpenTabs().catch(()=>{});
@@ -556,7 +603,18 @@ async function handleMessage(msg: any, sender: chrome.runtime.MessageSender): Pr
       const list = new Set(prefs.ignoredDomains);
       msg.ignore === false ? list.delete(domain) : list.add(domain);
       const next = await prefsStore.setPrefs({ ignoredDomains: [...list] });
-      if (msg.ignore !== false) { await scans.setScan(domain,{state:'skipped'}); await historyStore.recordScanState(domain,'skipped'); }
+      if (msg.ignore !== false) {
+        await scans.setScan(domain,{state:'skipped'});
+        await historyStore.recordScanState(domain,'skipped');
+        chrome.tabs.query({}, (tabs) => {
+          tabs.forEach((t) => {
+            const h = hostnameOf(t.url);
+            if (t.id && h && auditCache.normaliseDomain(h) === domain) {
+              chrome.tabs.sendMessage(t.id, { type: 'DISABLE_DPDP_RULES' }).catch(() => {});
+            }
+          });
+        });
+      }
       chrome.runtime.sendMessage({ type:'PREFS_CHANGED', prefs: next }).catch(()=>{});
       sync.scheduleSync();
       return { success:true, prefs: next };

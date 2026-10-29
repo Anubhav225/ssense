@@ -4,6 +4,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from
 import { Icon } from '../../ui/components';
 import type { AuditReport, RateLimitInfo } from '../../types/server-protocol';
 import { normaliseDomain } from '../../utils/domain';
+import { prettyAction, actionDescription } from '../../utils/severity';
 
 function formatDuration(ms: number): string {
   const s = Math.round(ms / 1000);
@@ -1339,8 +1340,17 @@ export const ChatInterface: React.FC<{ onOpenHistory?: () => void; onOpenPrivacy
                         </span>
                       )}
                     </div>
-                    <span className={`sx-action-badge ${v.network_action === 'BLOCK_THIRD_PARTY' ? 'sx-action-badge--block' : 'sx-action-badge--warn'}`}>
-                      {v.network_action === 'BLOCK_THIRD_PARTY' ? 'BLOCKED' : 'WARNING'}
+                    <span
+                      className={`sx-action-badge ${
+                        v.network_action === 'BLOCK_THIRD_PARTY'
+                          ? 'sx-action-badge--block'
+                          : v.network_action === 'WARN_USER_ONLY'
+                          ? 'sx-action-badge--warn'
+                          : 'sx-action-badge--info'
+                      }`}
+                      title={actionDescription(v.network_action)}
+                    >
+                      {prettyAction(v.network_action)}
                     </span>
                   </div>
                   {v.evidence_quote && (

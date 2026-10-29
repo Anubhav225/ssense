@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import type { Violation } from '../types/server-protocol';
-import { SEVERITY_LABEL, SEVERITY_ORDER, groupBySeverity, prettyAction, prettyViolationType, severityOf, type Severity } from '../utils/severity';
+import { SEVERITY_LABEL, SEVERITY_ORDER, groupBySeverity, prettyAction, actionDescription, prettyViolationType, severityOf, type Severity } from '../utils/severity';
 import { STATUS_META, scoreTone, type SiteStatus } from '../utils/status';
 
 // ─── Icons (inline, stroke-based) ─────────────────────────────────────────────
@@ -47,6 +47,7 @@ const PATHS: Record<string, React.ReactNode> = {
   scale: <><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" /><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" /><path d="M7 21h10M12 3v18M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2" /></>,
   shieldCheck: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="m9 12 2 2 4-4" /></>,
   shieldAlert: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></>,
+  shieldOff: <><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><line x1="1" y1="1" x2="23" y2="23" /></>,
   infoCircle: <><circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></>,
 };
 
@@ -167,7 +168,7 @@ export const ViolationCard: React.FC<{
             <div style={{ fontSize: compact ? 12 : 13, fontWeight: 650, lineHeight: 1.3 }}>{prettyViolationType(v.violation_type)}</div>
             <div style={{ display: 'flex', gap: 6, marginTop: 5, flexWrap: 'wrap', alignItems: 'center' }}>
               {v.statute_reference && <span className="sx-stamp" title="DPDP Act / Rules reference">§ {v.statute_reference.replace(/^section\s*/i, '')}</span>}
-              <span className={`sx-pill sx-tone-${SEV_TONE[sev]}`} style={{ padding: '1px 8px', fontSize: 10.5 }}>{prettyAction(v.network_action)}</span>
+              <span className={`sx-pill sx-tone-${SEV_TONE[sev]}`} style={{ padding: '1px 8px', fontSize: 10.5 }} title={actionDescription(v.network_action)}>{prettyAction(v.network_action)}</span>
             </div>
           </div>
           <Icon name="chevron" size={14} className="sx-chev" />
